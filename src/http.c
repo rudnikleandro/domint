@@ -1,13 +1,17 @@
 #include "http.h"
 
+#include <netdb.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "memory.h"
 #include "net.h"
 #include "text.h"
+
+#define HTTP_PORT "80"
 
 /* Looks `name` up among the response headers. Header names are
  * case-insensitive and the space after the colon is optional. */
@@ -87,8 +91,8 @@ static ssize_t recv_http_headers(int sockfd, char *buffer, size_t size)
     return (ssize_t)total;
 }
 
-/* Returns 1 when the HTTP exchange with this address completed, 0 otherwise. */
-int probe_http(const struct addrinfo *address, const char *ip_address, const char *target, const char *port)
+/* Returns 1 when the address answered the request. */
+static int probe_address(const struct addrinfo *address, const char *host, http_info *http)
 {
     int sockfd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
 
@@ -99,14 +103,6 @@ int probe_http(const struct addrinfo *address, const char *ip_address, const cha
 
     set_socket_timeout(sockfd);
 
-    if (connect_with_timeout(sockfd, address->ai_addr, address->ai_addrlen) != 0)
-    {
-        close(sockfd);
-        return 0;
-    }
-
-    printf("TCP connection: successful to %s:%s\n", ip_address, port);
-
     char request[512];
 
     snprintf(
@@ -114,78 +110,79 @@ int probe_http(const struct addrinfo *address, const char *ip_address, const cha
         sizeof(request),
         "HEAD / HTTP/1.1\r\n"
         "Host: %s\r\n"
-        "User-Agent: ExposureProof-C/0.1\r\n"
+        "User-Agent: " HTTP_USER_AGENT "\r\n"
         "Connection: close\r\n"
         "\r\n",
-        target);
-
-    if (send(sockfd, request, strlen(request), 0) == -1)
-    {
-        perror("send failed");
-        close(sockfd);
-        return 0;
-    }
+        host);
 
     char response[16384];
+    ssize_t received = -1;
 
-    ssize_t bytes_received = recv_http_headers(sockfd, response, sizeof(response));
-
-    if (bytes_received == -1)
+    if (connect_with_timeout(sockfd, address->ai_addr, address->ai_addrlen) == 0 &&
+        send(sockfd, request, strlen(request), 0) != -1)
     {
-        perror("recv failed");
-        close(sockfd);
-        return 0;
+        received = recv_http_headers(sockfd, response, sizeof(response));
     }
 
     close(sockfd);
 
-    sanitize_text(response, (size_t)bytes_received, 1);
-
-    char *line_end = strstr(response, "\r\n");
-
-    if (line_end != NULL)
+    if (received <= 0)
     {
-        size_t status_line_len = line_end - response;
-        char status_line[256];
-
-        if (status_line_len >= sizeof(status_line))
-        {
-            status_line_len = sizeof(status_line) - 1;
-        }
-
-        memcpy(status_line, response, status_line_len);
-        status_line[status_line_len] = '\0';
-
-        printf("\nHTTP status: %s\n", status_line);
-    }
-    else
-    {
-        printf("\nHTTP status: unavailable\n");
+        return 0;
     }
 
-    char location[512];
+    sanitize_text(response, (size_t)received, 1);
 
-    if (extract_http_header(response, "Location", location, sizeof(location)))
+    size_t status_len = strcspn(response, "\r\n");
+
+    if (status_len >= sizeof(http->status_line))
     {
-        printf("HTTP location: %s\n", location);
-    }
-    else
-    {
-        printf("HTTP location: not present\n");
+        status_len = sizeof(http->status_line) - 1;
     }
 
-    char server[256];
+    memcpy(http->status_line, response, status_len);
+    http->status_line[status_len] = '\0';
 
-    if (extract_http_header(response, "Server", server, sizeof(server)))
-    {
-        printf("HTTP server: %s\n", server);
-    }
-    else
-    {
-        printf("HTTP server: not disclosed\n");
-    }
+    extract_http_header(response, "Location", http->location, sizeof(http->location));
+    extract_http_header(response, "Server", http->server, sizeof(http->server));
 
-    printf("\nRaw HTTP response:\n%s\n", response);
+    http->raw = xstrdup(response);
 
     return 1;
+}
+
+void http_probe(domain_report *report)
+{
+    http_info *http = &report->http;
+    http->status = LOOKUP_FAILED;
+
+    for (size_t i = 0; i < report->address_count; i++)
+    {
+        const char *ip = report->addresses[i].ip;
+        struct addrinfo hints;
+        struct addrinfo *address = NULL;
+
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_NUMERICHOST;
+
+        if (getaddrinfo(ip, HTTP_PORT, &hints, &address) != 0)
+        {
+            continue;
+        }
+
+        http->attempts++;
+
+        int answered = probe_address(address, report->name, http);
+
+        freeaddrinfo(address);
+
+        if (answered)
+        {
+            snprintf(http->endpoint, sizeof(http->endpoint), strchr(ip, ':') != NULL ? "[%s]:%s" : "%s:%s", ip, HTTP_PORT);
+            http->status = LOOKUP_OK;
+            return;
+        }
+    }
 }

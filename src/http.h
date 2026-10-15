@@ -1,10 +1,12 @@
 #ifndef EXPOSUREPROOF_HTTP_H
 #define EXPOSUREPROOF_HTTP_H
 
-#include <netdb.h>
+#include "model.h"
 
-/* Returns 1 when the HTTP exchange with this address completed, 0 otherwise. */
-int probe_http(const struct addrinfo *address, const char *ip_address, const char *target,
-               const char *port);
+#define HTTP_USER_AGENT "ExposureProof-C/0.2"
+
+/* Sends one HEAD request to the first resolved address that accepts a
+ * connection on port 80. This is the only step that contacts the target. */
+void http_probe(domain_report *report);
 
 #endif

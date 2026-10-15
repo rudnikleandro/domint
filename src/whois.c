@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -11,11 +12,43 @@
 
 #define WHOIS_PORT "43"
 #define IANA_WHOIS_SERVER "whois.iana.org"
+#define TLD_CACHE_SIZE 64
+
+typedef struct
+{
+    char tld[64];
+    char server[FIELD_SIZE];
+} tld_entry;
+
+/* IANA's answer for a TLD does not change during a run, so ask once per TLD. */
+static tld_entry tld_cache[TLD_CACHE_SIZE];
+static size_t tld_cache_count;
+
+/* Registries format their records differently; these are the field names
+ * seen across the common gTLD and ccTLD servers, in order of preference. */
+static const char *const registrar_fields[] = {"Registrar:", "Sponsoring Registrar:", "registrar-name:", NULL};
+static const char *const created_fields[] = {"Creation Date:", "Created On:", "Created:", "Registered on:",
+                                             "Registration Time:", "Registration Date:", "Domain Registration Date:",
+                                             "registered:", NULL};
+static const char *const expires_fields[] = {"Registry Expiry Date:", "Registrar Registration Expiration Date:",
+                                             "Expiry Date:", "Expiration Date:", "Expiration Time:", "Expires On:",
+                                             "Expires:", "paid-till:", NULL};
+static const char *const updated_fields[] = {"Updated Date:", "Last Updated On:", "Last updated:", "Last Modified:",
+                                             "Changed:", "last-update:", NULL};
+static const char *const registrant_fields[] = {"Registrant Organization:", "Registrant Organisation:",
+                                                "Registrant Name:", "Registrant:", "owner:", "org-name:", NULL};
+static const char *const country_fields[] = {"Registrant Country:", NULL};
+
+static const char *const not_found_markers[] = {"No match for", "NOT FOUND", "No Data Found", "No entries found",
+                                                "Domain not found", "No Object Found", "no matching objects",
+                                                "is available for registration", "Status: free", "Status: AVAILABLE",
+                                                NULL};
+static const char *const privacy_markers[] = {"privacy", "redacted", "withheld", "proxy", "protected",
+                                              "not disclosed", "gdpr", NULL};
 
 /* Sends `query` to `server` on the WHOIS port and returns the full,
  * null-terminated response. WHOIS has no length header, so the response
- * is read in a loop until the server closes the connection. Caller owns
- * the returned buffer and must free() it. */
+ * is read in a loop until the server closes the connection. */
 char *whois_query(const char *server, const char *query)
 {
     int sockfd = connect_to_host(server, WHOIS_PORT);
@@ -80,117 +113,186 @@ char *whois_query(const char *server, const char *query)
     return buffer;
 }
 
-/* Scans `response` line by line looking for one that starts with `field`
- * (ignoring leading whitespace, since some WHOIS servers indent fields
- * under a domain block) and copies the value after it into `out`. */
-static void extract_field(const char *response, const char *field, char *out, size_t out_size)
+static size_t indentation(const char *line)
+{
+    return strspn(line, " \t");
+}
+
+static int copy_value(const char *value, char *out, size_t out_size)
+{
+    value += strspn(value, " \t");
+
+    size_t len = strcspn(value, "\r\n");
+
+    if (len == 0)
+    {
+        return 0;
+    }
+
+    if (len >= out_size)
+    {
+        len = out_size - 1;
+    }
+
+    memcpy(out, value, len);
+    out[len] = '\0';
+    return 1;
+}
+
+/* Copies the value of the first line that starts with `field` (ignoring
+ * case and leading whitespace). Some registries (.uk) put the value on the
+ * next, more indented line instead. Returns 1 when a value was found. */
+static int extract_field(const char *response, const char *field, char *out, size_t out_size)
 {
     size_t field_len = strlen(field);
     const char *line = response;
 
     while (line != NULL && *line != '\0')
     {
-        while (*line == ' ' || *line == '\t')
-        {
-            line++;
-        }
+        const char *next_line = strchr(line, '\n');
+        const char *text = line + indentation(line);
 
-        if (strncmp(line, field, field_len) == 0)
+        if (strncasecmp(text, field, field_len) == 0)
         {
-            const char *value = line + field_len;
-
-            while (*value == ' ' || *value == '\t')
+            if (copy_value(text + field_len, out, out_size))
             {
-                value++;
+                return 1;
             }
 
-            const char *line_end = strpbrk(value, "\r\n");
-            size_t len = line_end != NULL ? (size_t)(line_end - value) : strlen(value);
-
-            if (len >= out_size)
+            if (next_line != NULL && indentation(next_line + 1) > indentation(line) &&
+                copy_value(next_line + 1, out, out_size))
             {
-                len = out_size - 1;
+                return 1;
             }
-
-            memcpy(out, value, len);
-            out[len] = '\0';
-            return;
         }
 
-        const char *next_line = strpbrk(line, "\n");
         line = next_line != NULL ? next_line + 1 : NULL;
     }
 
-    snprintf(out, out_size, "not found");
+    return 0;
 }
 
-void run_whois(const char *domain)
+static void extract_first(const char *response, const char *const *fields, char *out, size_t out_size)
 {
-    printf("\n=== WHOIS ===\n");
+    out[0] = '\0';
 
-    const char *tld = strrchr(domain, '.');
-
-    if (tld == NULL || *(tld + 1) == '\0')
+    for (; *fields != NULL; fields++)
     {
-        printf("WHOIS: unable to determine TLD for %s\n", domain);
+        if (extract_field(response, *fields, out, out_size))
+        {
+            return;
+        }
+    }
+}
+
+static int contains_any(const char *text, const char *const *markers)
+{
+    for (; *markers != NULL; markers++)
+    {
+        if (contains_ci(text, *markers))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* Finds the WHOIS server of a TLD through IANA. Returns 1 when found, 0 when
+ * IANA lists none and -1 when IANA could not be reached. */
+static int whois_server_for(const char *tld, char *server, size_t size, int *queried_iana)
+{
+    *queried_iana = 0;
+
+    for (size_t i = 0; i < tld_cache_count; i++)
+    {
+        if (strcmp(tld_cache[i].tld, tld) == 0)
+        {
+            snprintf(server, size, "%s", tld_cache[i].server);
+            return server[0] != '\0';
+        }
+    }
+
+    *queried_iana = 1;
+
+    char *response = whois_query(IANA_WHOIS_SERVER, tld);
+
+    if (response == NULL)
+    {
+        return -1;
+    }
+
+    /* gTLDs use "whois:"; some ccTLDs use "refer:" instead. */
+    static const char *const fields[] = {"whois:", "refer:", NULL};
+    extract_first(response, fields, server, size);
+    free(response);
+
+    if (tld_cache_count < TLD_CACHE_SIZE)
+    {
+        snprintf(tld_cache[tld_cache_count].tld, sizeof(tld_cache[tld_cache_count].tld), "%s", tld);
+        snprintf(tld_cache[tld_cache_count].server, sizeof(tld_cache[tld_cache_count].server), "%s", server);
+        tld_cache_count++;
+    }
+
+    return server[0] != '\0';
+}
+
+void whois_collect(const char *domain, whois_info *info)
+{
+    snprintf(info->queried, sizeof(info->queried), "%s", domain);
+    info->status = LOOKUP_FAILED;
+
+    const char *dot = strrchr(domain, '.');
+    const char *tld = dot != NULL ? dot + 1 : domain;
+
+    int found = whois_server_for(tld, info->server, sizeof(info->server), &info->iana_queried);
+
+    if (found < 0)
+    {
+        snprintf(info->note, sizeof(info->note), "could not reach %s", IANA_WHOIS_SERVER);
         return;
     }
 
-    tld++;
-
-    char *iana_response = whois_query(IANA_WHOIS_SERVER, tld);
-
-    if (iana_response == NULL)
+    /* IANA no longer lists a server for some TLDs whose registry still runs
+     * one under the whois.nic.<tld> convention (.uk, for example). */
+    if (found == 0)
     {
-        printf("WHOIS: failed to query IANA for .%s referral\n", tld);
+        snprintf(info->server, sizeof(info->server), "whois.nic.%s", tld);
+    }
+
+    char *response = whois_query(info->server, domain);
+
+    if (response == NULL)
+    {
+        if (found == 0)
+        {
+            snprintf(info->note, sizeof(info->note),
+                     "no WHOIS server published for .%s, and %s did not answer (the registry may offer RDAP only)",
+                     tld, info->server);
+        }
+        else
+        {
+            snprintf(info->note, sizeof(info->note), "no answer from %s", info->server);
+        }
+
         return;
     }
 
-    char referral_server[256];
+    info->status = LOOKUP_OK;
+    info->raw = response;
+    info->registered = !contains_any(response, not_found_markers);
 
-    /* gTLDs (.com, .net, ...) use "whois:"; some ccTLDs use "refer:" instead. */
-    extract_field(iana_response, "whois:", referral_server, sizeof(referral_server));
-
-    if (strcmp(referral_server, "not found") == 0)
+    if (!info->registered)
     {
-        extract_field(iana_response, "refer:", referral_server, sizeof(referral_server));
-    }
-
-    free(iana_response);
-
-    /* Some registries (e.g. .google) publish an empty "whois:" field. */
-    if (strcmp(referral_server, "not found") == 0 || referral_server[0] == '\0')
-    {
-        printf("WHOIS: no WHOIS server published for .%s\n", tld);
         return;
     }
 
-    printf("WHOIS server: %s\n", referral_server);
+    extract_first(response, registrar_fields, info->registrar, sizeof(info->registrar));
+    extract_first(response, created_fields, info->created, sizeof(info->created));
+    extract_first(response, updated_fields, info->updated, sizeof(info->updated));
+    extract_first(response, expires_fields, info->expires, sizeof(info->expires));
+    extract_first(response, registrant_fields, info->registrant, sizeof(info->registrant));
+    extract_first(response, country_fields, info->registrant_country, sizeof(info->registrant_country));
 
-    char *domain_response = whois_query(referral_server, domain);
-
-    if (domain_response == NULL)
-    {
-        printf("WHOIS: failed to query %s for %s\n", referral_server, domain);
-        return;
-    }
-
-    char registrar[256];
-    char creation_date[128];
-    char expiry_date[128];
-    char name_server[256];
-
-    extract_field(domain_response, "Registrar:", registrar, sizeof(registrar));
-    extract_field(domain_response, "Creation Date:", creation_date, sizeof(creation_date));
-    extract_field(domain_response, "Registry Expiry Date:", expiry_date, sizeof(expiry_date));
-    extract_field(domain_response, "Name Server:", name_server, sizeof(name_server));
-
-    printf("Registrar: %s\n", registrar);
-    printf("Creation date: %s\n", creation_date);
-    printf("Expiry date: %s\n", expiry_date);
-    printf("Name server: %s\n", name_server);
-
-    printf("\nRaw WHOIS response:\n%s\n", domain_response);
-
-    free(domain_response);
+    info->privacy = info->registrant[0] != '\0' && contains_any(info->registrant, privacy_markers);
 }

@@ -7,6 +7,7 @@
 #include "whois.h"
 
 #define CYMRU_WHOIS_SERVER "whois.cymru.com"
+#define CYMRU_FIELD_COUNT 7
 
 static void trim_spaces(char *str)
 {
@@ -30,21 +31,22 @@ static void trim_spaces(char *str)
 
 /* Team Cymru answers " -v <ip>" with a header line followed by one line of
  * "AS | IP | BGP Prefix | CC | Registry | Allocated | AS Name". */
-void run_ip_asn_lookup(const char *ip_address)
+void asn_lookup(address_info *address)
 {
     char query[128];
-    snprintf(query, sizeof(query), " -v %s", ip_address);
+    snprintf(query, sizeof(query), " -v %s", address->ip);
+
+    address->asn_status = LOOKUP_FAILED;
 
     char *response = whois_query(CYMRU_WHOIS_SERVER, query);
 
     if (response == NULL)
     {
-        printf("  ASN: lookup failed\n");
         return;
     }
 
     char *data_line = strchr(response, '\n');
-    char *fields[7];
+    char *fields[CYMRU_FIELD_COUNT];
     int field_count = 0;
 
     if (data_line != NULL)
@@ -61,7 +63,7 @@ void run_ip_asn_lookup(const char *ip_address)
         char *saveptr;
 
         for (char *token = strtok_r(data_line, "|", &saveptr);
-             token != NULL && field_count < 7;
+             token != NULL && field_count < CYMRU_FIELD_COUNT;
              token = strtok_r(NULL, "|", &saveptr))
         {
             trim_spaces(token);
@@ -70,19 +72,20 @@ void run_ip_asn_lookup(const char *ip_address)
         }
     }
 
-    if (field_count < 7)
+    if (field_count == CYMRU_FIELD_COUNT)
     {
-        printf("  ASN: not found\n");
-    }
-    else if (strcmp(fields[0], "NA") == 0)
-    {
-        printf("  ASN: none (private or unannounced address)\n");
-    }
-    else
-    {
-        printf("  ASN: AS%s (%s)\n", fields[0], fields[6]);
-        printf("  BGP prefix: %s\n", fields[2]);
-        printf("  Country: %s | Registry: %s | Allocated: %s\n", fields[3], fields[4], fields[5]);
+        address->asn_status = LOOKUP_OK;
+        address->announced = strcmp(fields[0], "NA") != 0;
+
+        if (address->announced)
+        {
+            snprintf(address->asn, sizeof(address->asn), "%s", fields[0]);
+            snprintf(address->prefix, sizeof(address->prefix), "%s", fields[2]);
+            snprintf(address->country, sizeof(address->country), "%s", fields[3]);
+            snprintf(address->registry, sizeof(address->registry), "%s", fields[4]);
+            snprintf(address->allocated, sizeof(address->allocated), "%s", fields[5]);
+            snprintf(address->as_name, sizeof(address->as_name), "%s", fields[6]);
+        }
     }
 
     free(response);

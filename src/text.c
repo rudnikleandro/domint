@@ -1,5 +1,9 @@
 #include "text.h"
 
+#include <ctype.h>
+#include <string.h>
+#include <strings.h>
+
 /* Everything printed here comes from servers the investigated party may
  * control, so control bytes (terminal escape sequences, embedded NULs) are
  * replaced before they reach the analyst's terminal. */
@@ -19,5 +23,33 @@ void sanitize_text(char *text, size_t length, int keep_newlines)
         {
             text[i] = '?';
         }
+    }
+}
+
+int starts_with_ci(const char *text, const char *prefix)
+{
+    return strncasecmp(text, prefix, strlen(prefix)) == 0;
+}
+
+int contains_ci(const char *text, const char *needle)
+{
+    size_t needle_len = strlen(needle);
+
+    for (; *text != '\0'; text++)
+    {
+        if (strncasecmp(text, needle, needle_len) == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+void to_lower(char *text)
+{
+    for (; *text != '\0'; text++)
+    {
+        *text = (char)tolower((unsigned char)*text);
     }
 }
