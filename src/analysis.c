@@ -176,17 +176,30 @@ void describe_age(long days, char *out, size_t size)
         days = 0;
     }
 
+    long years = days / 365;
+    long months = (days % 365) / 30;
+
+    /* 360-364 leftover days would otherwise read as "12 months". */
+    if (months > 11)
+    {
+        months = 11;
+    }
+
     if (days < 60)
     {
         snprintf(out, size, "%ld day%s", days, days == 1 ? "" : "s");
     }
-    else if (days < 730)
+    else if (years == 0)
     {
         snprintf(out, size, "%ld months", days / 30);
     }
+    else if (months == 0)
+    {
+        snprintf(out, size, "%ld year%s", years, years == 1 ? "" : "s");
+    }
     else
     {
-        snprintf(out, size, "%ld years", days / 365);
+        snprintf(out, size, "%ld year%s, %ld month%s", years, years == 1 ? "" : "s", months, months == 1 ? "" : "s");
     }
 }
 

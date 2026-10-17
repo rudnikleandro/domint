@@ -251,7 +251,7 @@ static void print_overview(FILE *out, const domain_report *reports, size_t count
     {
         const domain_report *report = &reports[i];
         size_t counts[4];
-        char cells[3][16];
+        char cells[3][24];
         char created[32];
 
         count_findings(report, counts);
@@ -505,6 +505,22 @@ static void print_dns(FILE *out, const domain_report *report)
     free(other);
 }
 
+/* Registries write dates in many formats (2001-10-02T18:10:32Z, 20231116,
+ * 15-Dec-1996); show them all as YYYY-MM-DD, or as-is when unparseable. */
+static void print_whois_date(FILE *out, const char *label, const char *value)
+{
+    char date[64];
+
+    if (value[0] == '\0')
+    {
+        print_field(out, label, "not listed");
+        return;
+    }
+
+    whois_date(value, date, sizeof(date));
+    print_field(out, label, date);
+}
+
 static void print_whois(FILE *out, const domain_report *report)
 {
     const whois_info *whois = &report->whois;
@@ -531,9 +547,9 @@ static void print_whois(FILE *out, const domain_report *report)
     }
 
     print_field(out, "Registrar", whois->registrar[0] != '\0' ? whois->registrar : "not listed");
-    print_field(out, "Created", whois->created[0] != '\0' ? whois->created : "not listed");
-    print_field(out, "Updated", whois->updated[0] != '\0' ? whois->updated : "not listed");
-    print_field(out, "Expires", whois->expires[0] != '\0' ? whois->expires : "not listed");
+    print_whois_date(out, "Created", whois->created);
+    print_whois_date(out, "Updated", whois->updated);
+    print_whois_date(out, "Expires", whois->expires);
     print_field(out, "Registrant", whois->registrant[0] != '\0' ? whois->registrant : "not in the registry record");
 
     if (whois->registrant_country[0] != '\0')
@@ -708,7 +724,7 @@ static void print_correlation(FILE *out, const domain_report *reports, size_t co
 
     for (size_t cluster = 0; cluster < links->cluster_count; cluster++)
     {
-        char label[16];
+        char label[24];
         size_t member_count = 0;
 
         for (size_t i = 0; i < count; i++)

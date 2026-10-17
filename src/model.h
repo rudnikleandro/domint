@@ -74,7 +74,7 @@ typedef struct
 typedef struct
 {
     lookup_status status;
-    char note[FIELD_SIZE];
+    char note[FIELD_SIZE * 2];
     char queried[DOMAIN_SIZE];
     int iana_queried;
     char server[FIELD_SIZE];

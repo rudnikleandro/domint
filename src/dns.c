@@ -433,7 +433,12 @@ void dns_collect(const char *domain, const char *org_domain, const struct in_add
     string_list_sort(&info->txt.values);
     string_list_sort(&info->caa.values);
 
-    /* On macOS res_nclose() only closes sockets; res_ndestroy() also frees
-     * what res_ninit() allocated. */
+    /* On macOS res_nclose() only closes sockets and res_ndestroy() frees what
+     * res_ninit() allocated; glibc has no res_ndestroy() and its res_nclose()
+     * frees everything. */
+#ifdef __APPLE__
     res_ndestroy(&resolver);
+#else
+    res_nclose(&resolver);
+#endif
 }
