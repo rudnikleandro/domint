@@ -1,0 +1,2 @@
+AS      | IP               | BGP Prefix          | CC | Registry | Allocated  | AS Name
+NA      | 10.0.0.1         | NA                  |    | other    |            | NA

@@ -8,8 +8,7 @@
 #include "analysis.h"
 #include "dns.h"
 #include "domain.h"
-#include "memory.h"
-#include "text.h"
+#include "util.h"
 
 static const char KIND_TOKEN[] = "Verification token";
 static const char KIND_IP[] = "IP address";
@@ -78,17 +77,51 @@ static link_strength nameserver_strength(const char *nameserver)
     return provider == NULL || strcmp(provider, "Cloudflare") == 0 ? LINK_MEDIUM : LINK_WEAK;
 }
 
-/* A SOA contact under the same domain as the primary nameserver is the DNS
- * host's default (dns.cloudflare.com); a custom one says more about the owner. */
+/* The SOA contact of a zone hosted by a known DNS provider is that
+ * provider's default (dns.cloudflare.com, awsdns-hostmaster.amazon.com), as
+ * is one under the primary nameserver's own domain. Only a custom contact
+ * says something about the owner. */
 static link_strength soa_strength(const dns_info *dns)
 {
     char admin_org[DOMAIN_SIZE];
     char primary_org[DOMAIN_SIZE];
 
+    if (dns_provider_name(dns->soa_primary) != NULL)
+    {
+        return LINK_WEAK;
+    }
+
     organizational_domain(dns->soa_admin, admin_org, sizeof(admin_org));
     organizational_domain(dns->soa_primary, primary_org, sizeof(primary_org));
 
     return strcasecmp(admin_org, primary_org) == 0 ? LINK_WEAK : LINK_MEDIUM;
+}
+
+/* A shared address only narrows things down when it is not a CDN edge
+ * (shared by every customer) or a cloud address (routinely reassigned). */
+static link_strength address_strength(const address_info *address)
+{
+    if (address->asn_status != LOOKUP_OK)
+    {
+        return LINK_MEDIUM;
+    }
+
+    if (!address->announced || proxy_provider_name(address->as_name) != NULL)
+    {
+        return LINK_WEAK;
+    }
+
+    return cloud_provider_name(address->as_name) != NULL ? LINK_MEDIUM : LINK_STRONG;
+}
+
+static link_strength prefix_strength(const address_info *address)
+{
+    if (proxy_provider_name(address->as_name) != NULL || cloud_provider_name(address->as_name) != NULL)
+    {
+        return LINK_WEAK;
+    }
+
+    return LINK_MEDIUM;
 }
 
 static void collect_pivots(const domain_report *reports, size_t count, pivot_list *pivots)
@@ -101,21 +134,16 @@ static void collect_pivots(const domain_report *reports, size_t count, pivot_lis
         {
             const address_info *address = &report->addresses[i];
 
-            /* Private addresses such as 127.0.0.1 are shared by every sinkholed domain. */
-            if (address->asn_status == LOOKUP_OK && !address->announced)
-            {
-                add_pivot(pivots, LINK_WEAK, KIND_IP, address->ip, d);
-                continue;
-            }
+            /* Private addresses such as 127.0.0.1 are shared by every
+             * sinkholed domain; address_strength() makes them weak. */
+            add_pivot(pivots, address_strength(address), KIND_IP, address->ip, d);
 
-            add_pivot(pivots, LINK_STRONG, KIND_IP, address->ip, d);
-
-            if (address->asn_status == LOOKUP_OK)
+            if (address->asn_status == LOOKUP_OK && address->announced)
             {
                 char network[FIELD_SIZE * 2];
                 snprintf(network, sizeof(network), "AS%s %s", address->asn, address->as_name);
 
-                add_pivot(pivots, LINK_MEDIUM, KIND_PREFIX, address->prefix, d);
+                add_pivot(pivots, prefix_strength(address), KIND_PREFIX, address->prefix, d);
                 add_pivot(pivots, LINK_WEAK, KIND_ASN, network, d);
             }
         }

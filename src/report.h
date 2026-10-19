@@ -10,10 +10,13 @@
 typedef struct
 {
     int passive;
+    int full;
     int raw;
 } report_options;
 
-/* Writes the plain-text report. `links` is only used when count > 1. */
+/* Writes the plain-text report: summary and signals per domain, the
+ * collected data and sources with `full`, raw answers with `raw`. `links`
+ * is only used when count > 1. */
 void print_report(FILE *out, const domain_report *reports, size_t count, const correlation *links,
                   const report_options *options);
 

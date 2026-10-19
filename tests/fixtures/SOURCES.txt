@@ -1,0 +1,33 @@
+Frozen responses used by the tests, so parsers are tested without network
+access. Each file is the exact bytes returned by the server for the query
+below, collected on 2026-10-17 (UTC-3), except where noted.
+
+File                           Server                   Query
+whois_verisign_registered.txt  whois.verisign-grs.com   google.com  (2026-11-02)
+whois_verisign_not_found.txt   whois.verisign-grs.com   umdominioqueprovavelmentenaoexiste12345.com
+whois_nominet.txt              whois.nic.uk             bbc.co.uk
+whois_registro_br.txt          whois.registro.br        uol.com.br
+cymru_announced.txt            whois.cymru.com          " -v 8.8.8.8"
+cymru_private.txt              whois.cymru.com          " -v 10.0.0.1"
+rdap_verisign.json             rdap.verisign.com        /com/v1/domain/google.com  (2026-11-02)
+tls_certinfo.txt               example.com:443          libcurl CERTINFO for the leaf certificate (2026-11-03)
+
+Changes from the original bytes:
+- whois_registro_br.txt: the values of the two "e-mail:" lines were replaced
+  with redacted@example.invalid. They were organizational role addresses,
+  not personal data, but the parser does not use them.
+- tls_certinfo.txt: libcurl's text description of the certificate, with the
+  PEM copy of the certificate removed.
+
+SHA-256 of the files as stored:
+ed682a2b23997b9386b08ca1bb2dbb509a63723491eddc1611501222be3315a5  cymru_announced.txt
+b0c400a86f3446e82141191de4989990c9abb4cd316360baf610dbad1ecd501a  cymru_private.txt
+d6c6b73411c40570c24ffcd73d7e29628649d2864fad44001f7ce25c390cb7c2  whois_nominet.txt
+a97e1229483a9552456225b421a84a57f87e8babc0fa9dde6d8c51717a02fbc8  whois_registro_br.txt
+a6b087ee56974de74b14aeb9e94483cab06784466fc2615b33846f36f46a9400  whois_verisign_not_found.txt
+97fb8c91df1b967aa97709b9475d25a3a026e8b15d12283bff0dd45739bde780  whois_verisign_registered.txt
+4a24e2a23809016a2fc2ff75161b57a4aed1968429057d754ea295d9797a8b9b  rdap_verisign.json
+14bcb95bb8fc4dcb80cd2bfecd8a3efdf737ea8e107a55d9732913b275a7b118  tls_certinfo.txt
+
+The responses include each registry's terms of use, which allow lookups for
+lawful purposes; they are kept here only as parser test data.

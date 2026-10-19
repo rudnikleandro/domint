@@ -6,22 +6,17 @@
 #include <string.h>
 #include <time.h>
 
-#include "analysis.h"
-#include "asn.h"
 #include "correlate.h"
-#include "dns.h"
 #include "domain.h"
-#include "http.h"
-#include "memory.h"
 #include "model.h"
+#include "pipeline.h"
 #include "report.h"
-#include "resolve.h"
-#include "text.h"
-#include "whois.h"
+#include "util.h"
 
 typedef struct
 {
     int passive;
+    int full;
     int raw;
     const char *resolver;
     const char *input_file;
@@ -36,11 +31,11 @@ static void print_usage(FILE *out, const char *program)
     fprintf(out, "Options:\n");
     fprintf(out, "  -f, --file <path>      Read domains from a file, one per line (# starts a comment)\n");
     fprintf(out, "  -o, --output <path>    Write the report to a file instead of the terminal\n");
+    fprintf(out, "      --full             Include the collected data and every source queried\n");
+    fprintf(out, "      --raw              Also append the raw WHOIS and HTTP responses\n");
     fprintf(out, "      --passive          Do not contact the targets (skips the HTTP request)\n");
-    fprintf(out, "      --resolver <ipv4>  Send NS/MX/TXT/SOA/CAA/DMARC queries to this resolver\n");
-    fprintf(out, "                         instead of the system ones; it will see which domains\n");
-    fprintf(out, "                         you investigate\n");
-    fprintf(out, "      --raw              Append the raw WHOIS and HTTP responses\n");
+    fprintf(out, "      --resolver <ipv4>  Send the DNS record queries to this resolver; it will\n");
+    fprintf(out, "                         see which domains you investigate\n");
     fprintf(out, "  -h, --help             Show this help\n");
     fprintf(out, "\n");
     fprintf(out, "Domains can be given as URLs or defanged (hxxps://example[.]com/path).\n");
@@ -107,36 +102,9 @@ static double seconds_since(const struct timespec *start)
     return (double)(now.tv_sec - start->tv_sec) + (double)(now.tv_nsec - start->tv_nsec) / 1e9;
 }
 
-static void investigate(domain_report *report, const options *opts, const struct in_addr *custom_resolver)
+/* Returns 0 to go on, 1 to stop with an error. Sets *done after --help. */
+static int parse_arguments(int argc, char *argv[], options *opts, string_list *domains, int *done)
 {
-    struct timespec start;
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    organizational_domain(report->name, report->org_domain, sizeof(report->org_domain));
-    resolve_addresses(report);
-
-    for (size_t i = 0; i < report->address_count; i++)
-    {
-        asn_lookup(&report->addresses[i]);
-    }
-
-    if (!opts->passive)
-    {
-        http_probe(report);
-    }
-
-    dns_collect(report->name, report->org_domain, custom_resolver, &report->dns);
-    whois_collect(report->org_domain, &report->whois);
-    analyze_domain(report);
-
-    report->elapsed_seconds = seconds_since(&start);
-}
-
-int main(int argc, char *argv[])
-{
-    options opts = {0};
-    string_list domains = {0};
-
     for (int i = 1; i < argc; i++)
     {
         const char *arg = argv[i];
@@ -145,27 +113,32 @@ int main(int argc, char *argv[])
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
         {
             print_usage(stdout, argv[0]);
+            *done = 1;
             return 0;
         }
         else if (strcmp(arg, "--passive") == 0)
         {
-            opts.passive = 1;
+            opts->passive = 1;
+        }
+        else if (strcmp(arg, "--full") == 0)
+        {
+            opts->full = 1;
         }
         else if (strcmp(arg, "--raw") == 0)
         {
-            opts.raw = 1;
+            opts->raw = 1;
         }
         else if (strcmp(arg, "--resolver") == 0 && has_value)
         {
-            opts.resolver = argv[++i];
+            opts->resolver = argv[++i];
         }
         else if ((strcmp(arg, "-f") == 0 || strcmp(arg, "--file") == 0) && has_value)
         {
-            opts.input_file = argv[++i];
+            opts->input_file = argv[++i];
         }
         else if ((strcmp(arg, "-o") == 0 || strcmp(arg, "--output") == 0) && has_value)
         {
-            opts.output_file = argv[++i];
+            opts->output_file = argv[++i];
         }
         else if (arg[0] == '-')
         {
@@ -175,17 +148,17 @@ int main(int argc, char *argv[])
         }
         else
         {
-            add_domain(&domains, arg);
+            add_domain(domains, arg);
         }
     }
 
-    if (opts.input_file != NULL && read_domain_file(opts.input_file, &domains) != 0)
+    if (opts->input_file != NULL && read_domain_file(opts->input_file, domains) != 0)
     {
-        fprintf(stderr, "Cannot read %s: %s\n", opts.input_file, strerror(errno));
+        fprintf(stderr, "Cannot read %s: %s\n", opts->input_file, strerror(errno));
         return 1;
     }
 
-    if (domains.count == 0)
+    if (domains->count == 0)
     {
         if (argc == 1)
         {
@@ -199,6 +172,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    return 0;
+}
+
+int main(int argc, char *argv[])
+{
+    options opts = {0};
+    string_list domains = {0};
+    int done = 0;
+
+    if (parse_arguments(argc, argv, &opts, &domains, &done) != 0 || done)
+    {
+        string_list_free(&domains);
+        return done ? 0 : 1;
+    }
+
     struct in_addr resolver_addr;
     const struct in_addr *custom_resolver = NULL;
 
@@ -207,6 +195,7 @@ int main(int argc, char *argv[])
         if (inet_pton(AF_INET, opts.resolver, &resolver_addr) != 1)
         {
             fprintf(stderr, "Invalid resolver address (IPv4 expected): %s\n", opts.resolver);
+            string_list_free(&domains);
             return 1;
         }
 
@@ -223,6 +212,7 @@ int main(int argc, char *argv[])
         if (out == NULL)
         {
             fprintf(stderr, "Cannot write %s: %s\n", opts.output_file, strerror(errno));
+            string_list_free(&domains);
             return 1;
         }
     }
@@ -231,12 +221,17 @@ int main(int argc, char *argv[])
 
     for (size_t i = 0; i < domains.count; i++)
     {
-        snprintf(reports[i].name, sizeof(reports[i].name), "%s", domains.items[i]);
-        fprintf(stderr, "[%zu/%zu] %s ... ", i + 1, domains.count, reports[i].name);
+        domain_report *report = &reports[i];
+        struct timespec start;
 
-        investigate(&reports[i], &opts, custom_resolver);
+        snprintf(report->name, sizeof(report->name), "%s", domains.items[i]);
+        fprintf(stderr, "[%zu/%zu] %s ... ", i + 1, domains.count, report->name);
 
-        fprintf(stderr, "done (%.1fs)\n", reports[i].elapsed_seconds);
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        collect_domain(report, opts.passive, custom_resolver);
+        interpret_domain(report);
+
+        fprintf(stderr, "done (%.1fs)\n", seconds_since(&start));
     }
 
     correlation links = {0};
@@ -246,7 +241,7 @@ int main(int argc, char *argv[])
         correlate(reports, domains.count, &links);
     }
 
-    report_options report_opts = {opts.passive, opts.raw};
+    report_options report_opts = {opts.passive, opts.full || opts.raw, opts.raw};
     print_report(out, reports, domains.count, &links, &report_opts);
 
     int status = 0;

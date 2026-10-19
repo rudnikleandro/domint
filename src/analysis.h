@@ -24,6 +24,10 @@ void describe_age(long days, char *out, size_t size);
 const char *dns_provider_name(const char *nameserver);
 const char *mail_provider_name(const char *mail_host);
 
+/* CDN/proxy and cloud provider names for an AS name, or NULL. */
+const char *proxy_provider_name(const char *as_name);
+const char *cloud_provider_name(const char *as_name);
+
 /* True for TXT records that prove control of the domain to a third-party
  * service (google-site-verification=..., MS=..., and so on). */
 int is_verification_token(const char *txt);

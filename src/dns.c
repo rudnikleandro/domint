@@ -9,13 +9,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "model.h"
 #include "net.h"
-#include "text.h"
+#include "util.h"
 
 /* Not every resolver header defines ns_t_caa. */
 #define DNS_TYPE_CAA 257
 #define CAA_FLAG_CRITICAL 0x80
 #define TXT_VALUE_SIZE 2048
+
+/* The size recommended by DNS Flag Day 2020: large enough for most answers,
+ * small enough to avoid IP fragmentation, which many networks drop. */
+#define EDNS0_UDP_PAYLOAD 1232
 
 unsigned mx_priority(const char *entry)
 {
@@ -219,15 +224,48 @@ static int dns_exchange_tcp(const struct sockaddr_in *nameserver, const unsigned
  * is truncated. Done with our own sockets because libresolv's TCP fallback
  * has no read timeout and hangs on nameservers that accept the connection
  * but never answer. Returns the response length or -1. */
-static int dns_query(res_state resolver, const char *name, int type, unsigned char *response, int response_size)
+int dns_append_edns0(unsigned char *query, int query_len, int capacity)
+{
+    /* OPT pseudo-record (RFC 6891): root owner name, type 41, the UDP payload
+     * size in the class field, zero extended RCODE/version/flags, no data. */
+    const unsigned char opt[EDNS0_OPT_SIZE] = {
+        0x00,
+        0x00, 0x29,
+        (unsigned char)(EDNS0_UDP_PAYLOAD >> 8), (unsigned char)(EDNS0_UDP_PAYLOAD & 0xff),
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    };
+
+    if (query_len < NS_HFIXEDSZ || query_len + EDNS0_OPT_SIZE > capacity)
+    {
+        return -1;
+    }
+
+    unsigned additional = ((unsigned)query[10] << 8) | query[11];
+    additional++;
+    query[10] = (unsigned char)(additional >> 8);
+    query[11] = (unsigned char)(additional & 0xff);
+
+    memcpy(query + query_len, opt, sizeof(opt));
+    return query_len + EDNS0_OPT_SIZE;
+}
+
+/* Asks each nameserver in turn and writes the one that answered, as
+ * "ip:53", into `answered_by`. Returns the response length or -1. */
+static int dns_query(res_state resolver, const char *name, int type, unsigned char *response, int response_size,
+                     char *answered_by, size_t answered_by_size)
 {
     unsigned char query[NS_PACKETSZ];
+    unsigned char query_edns[NS_PACKETSZ];
     int query_len = res_nmkquery(resolver, ns_o_query, name, ns_c_in, type, NULL, 0, NULL, query, sizeof(query));
 
     if (query_len < 0)
     {
         return -1;
     }
+
+    memcpy(query_edns, query, (size_t)query_len);
+    int query_edns_len = dns_append_edns0(query_edns, query_len, sizeof(query_edns));
 
     for (int i = 0; i < resolver->nscount; i++)
     {
@@ -238,7 +276,20 @@ static int dns_query(res_state resolver, const char *name, int type, unsigned ch
             continue;
         }
 
-        int len = dns_exchange_udp(nameserver, query, query_len, response, response_size);
+        /* EDNS0 lets answers up to EDNS0_UDP_PAYLOAD bytes come back over
+         * UDP instead of forcing the TCP fallback, which some home routers
+         * do not answer. Servers that reject EDNS0 get the plain query. */
+        int len = -1;
+
+        if (query_edns_len > 0)
+        {
+            len = dns_exchange_udp(nameserver, query_edns, query_edns_len, response, response_size);
+        }
+
+        if (len < 0 || (response[3] & 0x0f) == ns_r_formerr)
+        {
+            len = dns_exchange_udp(nameserver, query, query_len, response, response_size);
+        }
 
         if (len >= 0 && (response[2] & 0x02) != 0)
         {
@@ -253,6 +304,10 @@ static int dns_query(res_state resolver, const char *name, int type, unsigned ch
 
             if (rcode == ns_r_noerror || rcode == ns_r_nxdomain)
             {
+                char ip[INET_ADDRSTRLEN] = "?";
+
+                inet_ntop(AF_INET, &nameserver->sin_addr, ip, sizeof(ip));
+                snprintf(answered_by, answered_by_size, "%s:%d", ip, NS_DEFAULTPORT);
                 return len;
             }
         }
@@ -261,19 +316,17 @@ static int dns_query(res_state resolver, const char *name, int type, unsigned ch
     return -1;
 }
 
-/* Adds the answers of `type` for `name` to `values` (SOA goes into `info`). */
-static lookup_status query_records(res_state resolver, const char *name, int type, string_list *values, dns_info *info)
+int dns_parse_answer(const unsigned char *packet, size_t length, int type, string_list *values, dns_info *info)
 {
-    static unsigned char response[NS_MAXMSG];
-    int len = dns_query(resolver, name, type, response, sizeof(response));
     ns_msg handle;
 
-    if (len < 0 || ns_initparse(response, len, &handle) < 0)
+    if (ns_initparse(packet, (int)length, &handle) < 0)
     {
-        return LOOKUP_FAILED;
+        return -1;
     }
 
     int count = ns_msg_count(handle, ns_s_an);
+    int matched = 0;
 
     for (int i = 0; i < count; i++)
     {
@@ -302,66 +355,123 @@ static lookup_status query_records(res_state resolver, const char *name, int typ
             formatted = format_caa(rr, value, sizeof(value));
             break;
         case ns_t_soa:
-            read_soa(handle, rr, info);
+            if (info != NULL && read_soa(handle, rr, info) == 0)
+            {
+                matched++;
+            }
             break;
         default:
             break;
         }
 
-        if (formatted == 0 && values != NULL)
+        if (formatted == 0)
         {
-            string_list_add_unique(values, value);
-        }
-    }
+            matched++;
 
-    return LOOKUP_OK;
-}
-
-/* DMARC lives at _dmarc.<name>; receivers fall back to the organizational
- * domain when a subdomain publishes none. */
-static void collect_dmarc(res_state resolver, const char *domain, const char *org_domain, dns_info *info)
-{
-    const char *candidates[2] = {domain, org_domain};
-    size_t candidate_count = strcmp(domain, org_domain) == 0 ? 1 : 2;
-
-    info->dmarc.status = LOOKUP_OK;
-
-    for (size_t i = 0; i < candidate_count; i++)
-    {
-        char name[DOMAIN_SIZE + 8];
-        string_list records = {0};
-
-        snprintf(name, sizeof(name), "_dmarc.%s", candidates[i]);
-
-        if (query_records(resolver, name, ns_t_txt, &records, info) != LOOKUP_OK)
-        {
-            info->dmarc.status = LOOKUP_FAILED;
-            string_list_free(&records);
-            return;
-        }
-
-        for (size_t j = 0; j < records.count; j++)
-        {
-            if (starts_with_ci(records.items[j], "v=DMARC1"))
+            if (values != NULL)
             {
-                string_list_add(&info->dmarc.values, records.items[j]);
+                string_list_add_unique(values, value);
             }
         }
+    }
 
-        string_list_free(&records);
+    return matched;
+}
 
-        if (info->dmarc.values.count > 0)
-        {
-            snprintf(info->dmarc_name, sizeof(info->dmarc_name), "%s", name);
-            return;
-        }
+static const char *type_name(int type)
+{
+    switch (type)
+    {
+    case ns_t_ns:
+        return "NS";
+    case ns_t_mx:
+        return "MX";
+    case ns_t_txt:
+        return "TXT";
+    case ns_t_soa:
+        return "SOA";
+    case DNS_TYPE_CAA:
+        return "CAA";
+    default:
+        return "?";
     }
 }
 
-static void describe_system_resolvers(const struct __res_state *resolver, char *out, size_t size)
+/* Observations are keyed by "<TYPE> <name>", e.g. "TXT _dmarc.example.com". */
+static void dns_query_label(int type, const char *name, char *out, size_t size)
 {
-    size_t len = (size_t)snprintf(out, size, "system");
-    const char *separator = " (";
+    snprintf(out, size, "%s %s", type_name(type), name);
+}
+
+/* Queries one record type and records the exchange with the raw packet.
+ * Returns the number of matching records, or -1 when nobody answered. */
+static int collect_records(res_state resolver, const char *name, int type, observation_list *observations,
+                           string_list *values)
+{
+    static unsigned char response[NS_MAXMSG];
+    char label[DOMAIN_SIZE + 16];
+    char answered_by[64] = "configured nameservers";
+
+    dns_query_label(type, name, label, sizeof(label));
+
+    int len = dns_query(resolver, name, type, response, sizeof(response), answered_by, sizeof(answered_by));
+
+    if (len < 0)
+    {
+        record_observation(observations, DNS_COLLECTOR, answered_by, label, OBS_NO_RESPONSE,
+                           "no nameserver gave a usable answer", NULL, 0);
+        return -1;
+    }
+
+    dns_info scratch;
+    memset(&scratch, 0, sizeof(scratch));
+
+    int matched = dns_parse_answer(response, (size_t)len, type, values, &scratch);
+    int nxdomain = (response[3] & 0x0f) == ns_r_nxdomain;
+    observation_status status = OBS_OK;
+    const char *detail = NULL;
+
+    if (matched < 0)
+    {
+        status = OBS_ERROR;
+        detail = "malformed DNS response";
+    }
+    else if (nxdomain)
+    {
+        status = OBS_EMPTY;
+        detail = "NXDOMAIN: the name does not exist";
+    }
+    else if (matched == 0)
+    {
+        status = OBS_EMPTY;
+        detail = "no records of this type";
+    }
+
+    record_observation(observations, DNS_COLLECTOR, answered_by, label, status, detail, response, (size_t)len);
+    return matched;
+}
+
+static int is_dmarc(const char *txt)
+{
+    return starts_with_ci(txt, "v=DMARC1");
+}
+
+static int count_dmarc(const string_list *records)
+{
+    int count = 0;
+
+    for (size_t i = 0; i < records->count; i++)
+    {
+        count += is_dmarc(records->items[i]);
+    }
+
+    return count;
+}
+
+static void describe_resolvers(const struct __res_state *resolver, int custom, char *out, size_t size)
+{
+    size_t len = (size_t)snprintf(out, size, "%s", custom ? "" : "system");
+    const char *separator = custom ? "" : " (";
 
     for (int i = 0; i < resolver->nscount && len < size; i++)
     {
@@ -377,61 +487,70 @@ static void describe_system_resolvers(const struct __res_state *resolver, char *
         separator = ", ";
     }
 
-    if (strcmp(separator, ", ") == 0 && len < size)
+    if (len < size)
     {
-        snprintf(out + len, size - len, ")");
+        snprintf(out + len, size - len, "%s", custom ? " (--resolver)" : strcmp(separator, ", ") == 0 ? ")" : "");
     }
 }
 
-void dns_collect(const char *domain, const char *org_domain, const struct in_addr *custom_resolver, dns_info *info)
+void dns_collect(const char *domain, const char *org_domain, const struct in_addr *custom_resolver,
+                 observation_list *observations)
 {
     /* Only used for the nameserver list and to build query packets. */
     struct __res_state resolver;
+    char description[FIELD_SIZE];
 
     memset(&resolver, 0, sizeof(resolver));
 
     if (res_ninit(&resolver) != 0)
     {
-        snprintf(info->resolver, sizeof(info->resolver), "unavailable");
-        info->ns.status = LOOKUP_FAILED;
-        info->mx.status = LOOKUP_FAILED;
-        info->txt.status = LOOKUP_FAILED;
-        info->caa.status = LOOKUP_FAILED;
-        info->dmarc.status = LOOKUP_FAILED;
-        info->soa_status = LOOKUP_FAILED;
+        record_observation(observations, DNS_CONFIG_COLLECTOR, "system configuration", "nameservers", OBS_ERROR,
+                           "could not read the resolver configuration", NULL, 0);
         return;
     }
 
     if (custom_resolver != NULL)
     {
-        char ip[INET_ADDRSTRLEN];
-
         memset(&resolver.nsaddr_list[0], 0, sizeof(resolver.nsaddr_list[0]));
         resolver.nsaddr_list[0].sin_family = AF_INET;
         resolver.nsaddr_list[0].sin_port = htons(NS_DEFAULTPORT);
         resolver.nsaddr_list[0].sin_addr = *custom_resolver;
         resolver.nscount = 1;
-
-        inet_ntop(AF_INET, custom_resolver, ip, sizeof(ip));
-        snprintf(info->resolver, sizeof(info->resolver), "%s (--resolver)", ip);
     }
-    else
+
+    describe_resolvers(&resolver, custom_resolver != NULL, description, sizeof(description));
+    record_observation(observations, DNS_CONFIG_COLLECTOR, custom_resolver != NULL ? "--resolver" : "system configuration",
+                       "nameservers", OBS_OK, NULL, description, strlen(description));
+
+    const int types[] = {ns_t_ns, ns_t_mx, ns_t_txt, ns_t_soa, DNS_TYPE_CAA};
+
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
     {
-        describe_system_resolvers(&resolver, info->resolver, sizeof(info->resolver));
+        collect_records(&resolver, domain, types[i], observations, NULL);
     }
 
-    info->ns.status = query_records(&resolver, domain, ns_t_ns, &info->ns.values, info);
-    info->mx.status = query_records(&resolver, domain, ns_t_mx, &info->mx.values, info);
-    info->txt.status = query_records(&resolver, domain, ns_t_txt, &info->txt.values, info);
-    info->soa_status = query_records(&resolver, domain, ns_t_soa, NULL, info);
-    info->caa.status = query_records(&resolver, domain, DNS_TYPE_CAA, &info->caa.values, info);
-    collect_dmarc(&resolver, domain, org_domain, info);
+    /* DMARC lives at _dmarc.<name>; receivers fall back to the organizational
+     * domain when a subdomain publishes none. */
+    const char *candidates[2] = {domain, org_domain};
+    size_t candidate_count = strcmp(domain, org_domain) == 0 ? 1 : 2;
 
-    /* Nameservers rotate the order of their answers; sorting keeps reports comparable. */
-    string_list_sort(&info->ns.values);
-    string_list_sort(&info->mx.values);
-    string_list_sort(&info->txt.values);
-    string_list_sort(&info->caa.values);
+    for (size_t i = 0; i < candidate_count; i++)
+    {
+        char name[DOMAIN_SIZE + 8];
+        string_list records = {0};
+
+        snprintf(name, sizeof(name), "_dmarc.%s", candidates[i]);
+
+        int matched = collect_records(&resolver, name, ns_t_txt, observations, &records);
+        int found = count_dmarc(&records) > 0;
+
+        string_list_free(&records);
+
+        if (matched < 0 || found)
+        {
+            break;
+        }
+    }
 
     /* On macOS res_nclose() only closes sockets and res_ndestroy() frees what
      * res_ninit() allocated; glibc has no res_ndestroy() and its res_nclose()
@@ -441,4 +560,98 @@ void dns_collect(const char *domain, const char *org_domain, const struct in_add
 #else
     res_nclose(&resolver);
 #endif
+}
+
+/* Reads the recorded answer for one query into `values` (and SOA fields
+ * into `info`). */
+static lookup_status interpret_records(const observation_list *observations, const char *name, int type,
+                                       string_list *values, dns_info *info)
+{
+    char label[DOMAIN_SIZE + 16];
+    dns_query_label(type, name, label, sizeof(label));
+
+    const observation *item = find_observation(observations, DNS_COLLECTOR, label);
+
+    if (item == NULL)
+    {
+        return LOOKUP_SKIPPED;
+    }
+
+    if ((item->status != OBS_OK && item->status != OBS_EMPTY) || item->content == NULL)
+    {
+        return LOOKUP_FAILED;
+    }
+
+    return dns_parse_answer(item->content, item->content_length, type, values, info) < 0 ? LOOKUP_FAILED : LOOKUP_OK;
+}
+
+void dns_interpret(const char *domain, const char *org_domain, const observation_list *observations, dns_info *info)
+{
+    const observation *config = find_observation(observations, DNS_CONFIG_COLLECTOR, "nameservers");
+
+    if (config != NULL && config->status == OBS_OK)
+    {
+        char *text = observation_text(config);
+        snprintf(info->resolver, sizeof(info->resolver), "%s", text);
+        free(text);
+    }
+    else
+    {
+        snprintf(info->resolver, sizeof(info->resolver), "unavailable");
+    }
+
+    info->ns.status = interpret_records(observations, domain, ns_t_ns, &info->ns.values, info);
+    info->mx.status = interpret_records(observations, domain, ns_t_mx, &info->mx.values, info);
+    info->txt.status = interpret_records(observations, domain, ns_t_txt, &info->txt.values, info);
+    info->soa_status = interpret_records(observations, domain, ns_t_soa, NULL, info);
+    info->caa.status = interpret_records(observations, domain, DNS_TYPE_CAA, &info->caa.values, info);
+
+    const char *candidates[2] = {domain, org_domain};
+    size_t candidate_count = strcmp(domain, org_domain) == 0 ? 1 : 2;
+
+    info->dmarc.status = LOOKUP_SKIPPED;
+
+    for (size_t i = 0; i < candidate_count; i++)
+    {
+        char name[DOMAIN_SIZE + 8];
+        string_list records = {0};
+
+        snprintf(name, sizeof(name), "_dmarc.%s", candidates[i]);
+
+        lookup_status status = interpret_records(observations, name, ns_t_txt, &records, NULL);
+
+        if (status == LOOKUP_SKIPPED)
+        {
+            string_list_free(&records);
+            break;
+        }
+
+        info->dmarc.status = status;
+
+        for (size_t j = 0; j < records.count; j++)
+        {
+            if (is_dmarc(records.items[j]))
+            {
+                string_list_add(&info->dmarc.values, records.items[j]);
+            }
+        }
+
+        string_list_free(&records);
+
+        if (status == LOOKUP_FAILED || info->dmarc.values.count > 0)
+        {
+            if (info->dmarc.values.count > 0)
+            {
+                snprintf(info->dmarc_name, sizeof(info->dmarc_name), "%s", name);
+            }
+
+            break;
+        }
+    }
+
+    /* Nameservers rotate the order of their answers; sorting keeps reports comparable. */
+    string_list_sort(&info->ns.values);
+    string_list_sort(&info->mx.values);
+    string_list_sort(&info->txt.values);
+    string_list_sort(&info->caa.values);
 }

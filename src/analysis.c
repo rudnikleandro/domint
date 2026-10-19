@@ -9,12 +9,13 @@
 
 #include "dns.h"
 #include "domain.h"
-#include "text.h"
+#include "util.h"
 
 #define SECONDS_PER_DAY 86400
 #define NEW_DOMAIN_DAYS 30
 #define YOUNG_DOMAIN_DAYS 180
 #define EXPIRY_WARNING_DAYS 30
+#define EXPIRY_IMMINENT_DAYS 7
 #define TXT_COPY_SIZE 2048
 
 #define COUNT(array) (sizeof(array) / sizeof((array)[0]))
@@ -78,6 +79,22 @@ static const provider proxy_providers[] = {
     {"DDOS-GUARD", "DDoS-Guard"},
 };
 
+/* Matched against the AS name. Addresses in these networks are frequently
+ * reassigned or shared, so they say little about who runs a domain. */
+static const provider cloud_providers[] = {
+    {"AMAZON", "Amazon Web Services"},
+    {"GOOGLE", "Google Cloud"},
+    {"MICROSOFT", "Microsoft Azure"},
+    {"ORACLE", "Oracle Cloud"},
+    {"DIGITALOCEAN", "DigitalOcean"},
+    {"LINODE", "Linode"},
+    {"OVH", "OVHcloud"},
+    {"HETZNER", "Hetzner"},
+    {"CHOOPA", "Vultr"},
+    {"ALIBABA", "Alibaba Cloud"},
+    {"TENCENT", "Tencent Cloud"},
+};
+
 static const char *const month_names[] = {"jan", "feb", "mar", "apr", "may", "jun",
                                           "jul", "aug", "sep", "oct", "nov", "dec"};
 
@@ -102,6 +119,16 @@ const char *dns_provider_name(const char *nameserver)
 const char *mail_provider_name(const char *mail_host)
 {
     return match_provider(mail_host, mail_providers, COUNT(mail_providers));
+}
+
+const char *proxy_provider_name(const char *as_name)
+{
+    return match_provider(as_name, proxy_providers, COUNT(proxy_providers));
+}
+
+const char *cloud_provider_name(const char *as_name)
+{
+    return match_provider(as_name, cloud_providers, COUNT(cloud_providers));
 }
 
 int parse_whois_date(const char *text, time_t *out)
@@ -420,14 +447,25 @@ static void analyze_registration(domain_report *report, time_t now)
         long days_left = (long)((expires - now) / SECONDS_PER_DAY);
         whois_date(whois->expires, date, sizeof(date));
 
+        /* Renewing in the last weeks is routine, and registries hold an
+         * expired name for a grace period before releasing it, so only an
+         * imminent or past expiry is more than something to watch. */
         if (expires < now)
         {
-            add_finding(report, SEVERITY_MEDIUM, "The registration expired on %s.", date);
+            add_finding(report, SEVERITY_MEDIUM,
+                        "The registration expired on %s. Once the registry's grace period ends, the name can be registered by anyone.",
+                        date);
+        }
+        else if (days_left <= EXPIRY_IMMINENT_DAYS)
+        {
+            add_finding(report, SEVERITY_LOW,
+                        "The registration expires in %ld day%s (%s) and has not been renewed yet.", days_left,
+                        days_left == 1 ? "" : "s", date);
         }
         else if (days_left <= EXPIRY_WARNING_DAYS)
         {
-            add_finding(report, SEVERITY_LOW,
-                        "The registration expires in %ld days (%s); if it lapses, anyone can register the name.",
+            add_finding(report, SEVERITY_INFO,
+                        "The registration expires in %ld days (%s). Renewal often happens close to the date; worth checking again later.",
                         days_left, date);
         }
     }

@@ -4,9 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "model.h"
 #include "whois.h"
 
 #define CYMRU_WHOIS_SERVER "whois.cymru.com"
+#define ASN_COLLECTOR "asn"
 #define CYMRU_FIELD_COUNT 7
 
 static void trim_spaces(char *str)
@@ -29,21 +31,43 @@ static void trim_spaces(char *str)
     }
 }
 
-/* Team Cymru answers " -v <ip>" with a header line followed by one line of
- * "AS | IP | BGP Prefix | CC | Registry | Allocated | AS Name". */
-void asn_lookup(address_info *address)
+void asn_collect(const char *ip, observation_list *observations)
 {
     char query[128];
-    snprintf(query, sizeof(query), " -v %s", address->ip);
+    snprintf(query, sizeof(query), " -v %s", ip);
+
+    whois_response response = whois_query(CYMRU_WHOIS_SERVER, query);
+
+    record_observation(observations, ASN_COLLECTOR, CYMRU_WHOIS_SERVER ":43", ip, response.status, response.error,
+                       response.data, response.length);
+    free(response.data);
+}
+
+void asn_interpret(const observation_list *observations, address_info *address)
+{
+    const observation *item = find_observation(observations, ASN_COLLECTOR, address->ip);
+
+    if (item == NULL)
+    {
+        address->asn_status = LOOKUP_SKIPPED;
+        return;
+    }
 
     address->asn_status = LOOKUP_FAILED;
 
-    char *response = whois_query(CYMRU_WHOIS_SERVER, query);
-
-    if (response == NULL)
+    if (item->status == OBS_OK)
     {
-        return;
+        char *text = observation_text(item);
+        asn_parse(text, address);
+        free(text);
     }
+}
+
+/* Team Cymru answers " -v <ip>" with a header line followed by one line of
+ * "AS | IP | BGP Prefix | CC | Registry | Allocated | AS Name". */
+void asn_parse(char *response, address_info *address)
+{
+    address->asn_status = LOOKUP_FAILED;
 
     char *data_line = strchr(response, '\n');
     char *fields[CYMRU_FIELD_COUNT];
@@ -87,6 +111,4 @@ void asn_lookup(address_info *address)
             snprintf(address->as_name, sizeof(address->as_name), "%s", fields[6]);
         }
     }
-
-    free(response);
 }

@@ -7,17 +7,18 @@
 
 #include "analysis.h"
 #include "dns.h"
+#include "model.h"
 #include "http.h"
-#include "memory.h"
+#include "util.h"
 
 #define RULE "================================================================================"
 #define LABEL_WIDTH 14
 #define SUB_LABEL_WIDTH 12
-#define PARTY_WIDTH 30
 #define KIND_WIDTH 22
 #define WRAP_WIDTH 64
 #define REPORT_WIDTH 80
 #define TAG_WIDTH 9
+#define SOURCE_INDENT 15
 
 static const char *severity_tag(severity level)
 {
@@ -83,12 +84,11 @@ static void print_wrapped(FILE *out, int indent, int label_width, const char *la
     }
 }
 
-/* Word-wraps `text` to the report width, with continuation lines indented
- * under the first word: "  [MEDIUM] text ...". */
-static void print_paragraph(FILE *out, const char *tag, const char *text)
+/* Word-wraps `text` to the report width, starting at column `indent` after
+ * `tag` and indenting continuation lines the same way: "  [MEDIUM] text ...". */
+static void print_paragraph(FILE *out, int indent, const char *tag, const char *text)
 {
-    const int indent = 2 + TAG_WIDTH;
-    int column = fprintf(out, "  %-*s", TAG_WIDTH, tag);
+    int column = fprintf(out, "  %-*s", indent - 2, tag);
 
     while (*text != '\0')
     {
@@ -205,19 +205,8 @@ static void print_header(FILE *out, size_t count, const report_options *options)
     print_field(out, "Generated", generated);
     print_field(out, "Domains", domains);
 
-    if (options->passive)
-    {
-        print_field(out, "Mode", "passive: no connection was made to the targets");
-    }
-    else
-    {
-        print_field(out, "Mode", "active: one HTTP request per domain went to the target");
-        print_field(out, "", "from your IP (User-Agent " HTTP_USER_AGENT ")");
-    }
-
-    print_field(out, "Note", "DNS queries reach the targets' nameservers through the");
-    print_field(out, "", "resolver, not from your IP; WHOIS and ASN lookups only");
-    print_field(out, "", "reach registries.");
+    print_field(out, "Mode", options->passive ? "passive (the targets were not contacted)"
+                                              : "active (one HTTP request to each target, from your IP)");
 }
 
 static void print_overview(FILE *out, const domain_report *reports, size_t count)
@@ -286,6 +275,11 @@ static void print_summary(FILE *out, const domain_report *report)
     describe_signals(report, text, sizeof(text));
     print_field(out, "Signals", text);
 
+    if (report->observations.count > 0)
+    {
+        print_field(out, "Collected", report->observations.items[0].collected_at);
+    }
+
     const whois_info *whois = &report->whois;
 
     if (whois->status != LOOKUP_OK)
@@ -338,7 +332,7 @@ static void print_signals(FILE *out, const domain_report *report)
 
     for (size_t i = 0; i < report->finding_count; i++)
     {
-        print_paragraph(out, severity_tag(report->findings[i].level), report->findings[i].text);
+        print_paragraph(out, 2 + TAG_WIDTH, severity_tag(report->findings[i].level), report->findings[i].text);
     }
 }
 
@@ -379,13 +373,13 @@ static void print_addresses(FILE *out, const domain_report *report)
     }
 }
 
-static void print_http(FILE *out, const domain_report *report, const report_options *options)
+static void print_http(FILE *out, const domain_report *report)
 {
     const http_info *http = &report->http;
 
     print_section(out, "HTTP");
 
-    if (options->passive)
+    if (http->not_queried)
     {
         fprintf(out, "  Not contacted (--passive).\n");
     }
@@ -558,74 +552,28 @@ static void print_whois(FILE *out, const domain_report *report)
     }
 }
 
-static void print_contact(FILE *out, const char *party, const char *purpose)
+/* Every query made, in order: its outcome, what was asked and of whom. The
+ * HTTP request is the only one that reached the target itself. */
+static void print_sources(FILE *out, const domain_report *report)
 {
-    if ((int)strlen(party) >= PARTY_WIDTH)
-    {
-        fprintf(out, "  %s\n  %-*s%s\n", party, PARTY_WIDTH, "", purpose);
-    }
-    else
-    {
-        fprintf(out, "  %-*s%s\n", PARTY_WIDTH, party, purpose);
-    }
-}
+    char asked[FIELD_SIZE * 2];
+    char source[FIELD_SIZE + 32];
 
-/* Who learned about this investigation, and from where. */
-static void print_contacted(FILE *out, const domain_report *report, const report_options *options)
-{
-    const whois_info *whois = &report->whois;
-    char purpose[FIELD_SIZE * 2];
-    size_t asn_lookups = 0;
+    print_section(out, "SOURCES");
 
-    print_section(out, "CONTACTED");
+    for (size_t i = 0; i < report->observations.count; i++)
+    {
+        const observation *item = &report->observations.items[i];
+        int reached_target = strcmp(item->collector, HTTP_COLLECTOR) == 0 && item->status != OBS_NOT_QUERIED;
 
-    if (strstr(report->dns.resolver, "--resolver") != NULL)
-    {
-        print_contact(out, "system resolver", "A/AAAA and PTR lookups");
-        print_contact(out, report->dns.resolver, "NS, MX, TXT, SOA, CAA and DMARC lookups");
-    }
-    else
-    {
-        print_contact(out, report->dns.resolver, "all DNS lookups");
-    }
+        snprintf(asked, sizeof(asked), "%s %s", item->collector, item->query);
+        snprintf(source, sizeof(source), "%s%s", item->source, reached_target ? " (target, from your IP)" : "");
+        fprintf(out, "  %-12s %-34s %s\n", observation_status_name(item->status), asked, source);
 
-    if (whois->iana_queried)
-    {
-        const char *dot = strrchr(whois->queried, '.');
-        snprintf(purpose, sizeof(purpose), "WHOIS server for .%s", dot != NULL ? dot + 1 : whois->queried);
-        print_contact(out, "whois.iana.org", purpose);
-    }
-
-    if (whois->server[0] != '\0')
-    {
-        snprintf(purpose, sizeof(purpose), "registration of %s", whois->queried);
-        print_contact(out, whois->server, purpose);
-    }
-
-    for (size_t i = 0; i < report->address_count; i++)
-    {
-        asn_lookups += report->addresses[i].asn_status != LOOKUP_SKIPPED;
-    }
-
-    if (asn_lookups > 0)
-    {
-        snprintf(purpose, sizeof(purpose), "network of %zu address%s", asn_lookups, asn_lookups == 1 ? "" : "es");
-        print_contact(out, "whois.cymru.com", purpose);
-    }
-
-    if (options->passive)
-    {
-        print_contact(out, "target", "not contacted (--passive)");
-    }
-    else if (report->http.status == LOOKUP_OK)
-    {
-        print_contact(out, report->http.endpoint, "HTTP request from your IP (target)");
-    }
-    else if (report->http.attempts > 0)
-    {
-        snprintf(purpose, sizeof(purpose), "%zu connection attempt%s from your IP on port 80", report->http.attempts,
-                 report->http.attempts == 1 ? "" : "s");
-        print_contact(out, "target", purpose);
+        if (item->detail[0] != '\0')
+        {
+            print_paragraph(out, SOURCE_INDENT, "", item->detail);
+        }
     }
 }
 
@@ -648,11 +596,17 @@ static void print_domain(FILE *out, const domain_report *report, const report_op
 
     print_summary(out, report);
     print_signals(out, report);
+
+    if (!options->full)
+    {
+        return;
+    }
+
     print_addresses(out, report);
-    print_http(out, report, options);
+    print_http(out, report);
     print_dns(out, report);
     print_whois(out, report);
-    print_contacted(out, report, options);
+    print_sources(out, report);
 
     if (options->raw)
     {
@@ -665,11 +619,11 @@ static const char *strength_title(link_strength strength)
     switch (strength)
     {
     case LINK_STRONG:
-        return "STRONG LINKS";
+        return "HIGH SPECIFICITY (rarely shared by chance)";
     case LINK_MEDIUM:
-        return "MEDIUM LINKS";
+        return "MEDIUM SPECIFICITY";
     default:
-        return "WEAK LINKS (usually a common provider)";
+        return "LOW SPECIFICITY (shared provider infrastructure)";
     }
 }
 
@@ -678,8 +632,9 @@ static void print_correlation(FILE *out, const domain_report *reports, size_t co
     const char **names = xcalloc(count, sizeof(*names));
 
     fprintf(out, "\n\n%s\nCORRELATION\n%s\n\n", RULE, RULE);
-    fprintf(out, "Indicators found on two or more of the %zu domains. Strong links rarely occur\n", count);
-    fprintf(out, "between unrelated domains; weak links usually mean a shared provider.\n");
+    fprintf(out, "Indicators found on two or more of the %zu domains, grouped by how specific\n", count);
+    fprintf(out, "they are. They are leads for review, not proof of common ownership: even a\n");
+    fprintf(out, "shared IP can be a hosting provider serving unrelated customers.\n");
 
     if (links->indicator_count == 0)
     {
@@ -715,7 +670,7 @@ static void print_correlation(FILE *out, const domain_report *reports, size_t co
         }
     }
 
-    print_section(out, "CLUSTERS (domains joined by strong links)");
+    print_section(out, "CANDIDATE GROUPS (joined by high-specificity indicators; review before concluding)");
 
     if (links->cluster_count == 0)
     {

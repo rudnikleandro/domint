@@ -7,9 +7,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "memory.h"
+#include "model.h"
 #include "net.h"
-#include "text.h"
 
 #define HTTP_PORT "80"
 
@@ -92,13 +91,16 @@ static ssize_t recv_http_headers(int sockfd, char *buffer, size_t size)
 }
 
 /* Returns 1 when the address answered the request. */
-static int probe_address(const struct addrinfo *address, const char *host, http_info *http)
+/* Sends the HEAD request and reads the response headers into `response`.
+ * Returns the number of bytes read, 0 when the server sent nothing, or -1
+ * when no connection could be made. */
+static ssize_t fetch_head(const struct addrinfo *address, const char *host, char *response, size_t size)
 {
     int sockfd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
 
     if (sockfd == -1)
     {
-        return 0;
+        return -1;
     }
 
     set_socket_timeout(sockfd);
@@ -115,50 +117,23 @@ static int probe_address(const struct addrinfo *address, const char *host, http_
         "\r\n",
         host);
 
-    char response[16384];
     ssize_t received = -1;
 
     if (connect_with_timeout(sockfd, address->ai_addr, address->ai_addrlen) == 0 &&
         send(sockfd, request, strlen(request), 0) != -1)
     {
-        received = recv_http_headers(sockfd, response, sizeof(response));
+        received = recv_http_headers(sockfd, response, size);
     }
 
     close(sockfd);
-
-    if (received <= 0)
-    {
-        return 0;
-    }
-
-    sanitize_text(response, (size_t)received, 1);
-
-    size_t status_len = strcspn(response, "\r\n");
-
-    if (status_len >= sizeof(http->status_line))
-    {
-        status_len = sizeof(http->status_line) - 1;
-    }
-
-    memcpy(http->status_line, response, status_len);
-    http->status_line[status_len] = '\0';
-
-    extract_http_header(response, "Location", http->location, sizeof(http->location));
-    extract_http_header(response, "Server", http->server, sizeof(http->server));
-
-    http->raw = xstrdup(response);
-
-    return 1;
+    return received;
 }
 
-void http_probe(domain_report *report)
+void http_collect(const char *host, const address_info *addresses, size_t count, observation_list *observations)
 {
-    http_info *http = &report->http;
-    http->status = LOOKUP_FAILED;
-
-    for (size_t i = 0; i < report->address_count; i++)
+    for (size_t i = 0; i < count; i++)
     {
-        const char *ip = report->addresses[i].ip;
+        const char *ip = addresses[i].ip;
         struct addrinfo hints;
         struct addrinfo *address = NULL;
 
@@ -172,16 +147,70 @@ void http_probe(domain_report *report)
             continue;
         }
 
-        http->attempts++;
+        char endpoint[IP_SIZE + 8];
+        char response[16384];
 
-        int answered = probe_address(address, report->name, http);
+        snprintf(endpoint, sizeof(endpoint), strchr(ip, ':') != NULL ? "[%s]:%s" : "%s:%s", ip, HTTP_PORT);
+
+        ssize_t received = fetch_head(address, host, response, sizeof(response));
 
         freeaddrinfo(address);
 
-        if (answered)
+        if (received > 0)
         {
-            snprintf(http->endpoint, sizeof(http->endpoint), strchr(ip, ':') != NULL ? "[%s]:%s" : "%s:%s", ip, HTTP_PORT);
+            record_observation(observations, HTTP_COLLECTOR, endpoint, host, OBS_OK, NULL, response, (size_t)received);
+            return;
+        }
+
+        record_observation(observations, HTTP_COLLECTOR, endpoint, host, received == 0 ? OBS_EMPTY : OBS_NO_RESPONSE,
+                           received == 0 ? "connected, but the server sent nothing" : "no answer on port 80", NULL, 0);
+    }
+}
+
+void http_parse(const char *response, http_info *http)
+{
+    size_t status_len = strcspn(response, "\r\n");
+
+    if (status_len >= sizeof(http->status_line))
+    {
+        status_len = sizeof(http->status_line) - 1;
+    }
+
+    memcpy(http->status_line, response, status_len);
+    http->status_line[status_len] = '\0';
+
+    extract_http_header(response, "Location", http->location, sizeof(http->location));
+    extract_http_header(response, "Server", http->server, sizeof(http->server));
+}
+
+void http_interpret(const observation_list *observations, http_info *http)
+{
+    http->status = LOOKUP_SKIPPED;
+
+    for (size_t i = 0; i < observations->count; i++)
+    {
+        const observation *item = &observations->items[i];
+
+        if (strcmp(item->collector, HTTP_COLLECTOR) != 0)
+        {
+            continue;
+        }
+
+        if (item->status == OBS_NOT_QUERIED)
+        {
+            http->not_queried = 1;
+            continue;
+        }
+
+        http->attempts++;
+        http->status = LOOKUP_FAILED;
+
+        if (item->status == OBS_OK)
+        {
             http->status = LOOKUP_OK;
+            snprintf(http->endpoint, sizeof(http->endpoint), "%s", item->source);
+            http->raw = observation_text(item);
+            http_parse(http->raw, http);
             return;
         }
     }

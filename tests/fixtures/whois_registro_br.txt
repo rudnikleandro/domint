@@ -1,0 +1,46 @@
+% Copyright (c) Nic.br - Use of this data is governed by the Use and
+% Privacy Policy at https://registro.br/upp . Distribution,
+% commercialization, reproduction, and use for advertising or similar
+% purposes are expressly prohibited.
+% 2026-10-17T14:33:37-03:00 - 177.118.144.74
+
+domain:      uol.com.br
+owner:       Universo Online S.A.
+ownerid:     01.109.184/0004-38
+responsible: Contato da Entidade UOL
+country:     BR
+owner-c:     CAU12
+tech-c:      CTU6
+nserver:     eliot.uol.com.br 172.64.52.216
+nsstat:      20261017 AA
+nslastaa:    20261017
+nserver:     borges.uol.com.br 172.64.53.68
+nsstat:      20261017 AA
+nslastaa:    20261017
+nserver:     charles.uol.com.br 172.64.52.59
+nsstat:      20261017 AA
+nslastaa:    20261017
+created:     19960424 #7137
+changed:     20240827
+expires:     20340424
+status:      published
+
+nic-hdl-br:  CAU12
+person:      Contato Administrativo - UOL
+e-mail:      redacted@example.invalid
+country:     BR
+created:     20031202
+changed:     20200602
+
+nic-hdl-br:  CTU6
+person:      Contato Tecnico - UOL
+e-mail:      redacted@example.invalid
+country:     BR
+created:     20031202
+changed:     20170106
+
+% Security and mail abuse issues should also be addressed to cert.br,
+% respectivelly to cert@cert.br and mail-abuse@cert.br
+%
+% whois.registro.br only accepts exact match queries for domains,
+% registrants, contacts, tickets, providers, IPs, and ASNs.

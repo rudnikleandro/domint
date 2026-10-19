@@ -6,7 +6,7 @@
 #include <string.h>
 #include <strings.h>
 
-#include "text.h"
+#include "util.h"
 
 #define MAX_DOMAIN_LENGTH 253
 #define MAX_LABEL_LENGTH 63
