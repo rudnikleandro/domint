@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_HTTPS_H
-#define EXPOSUREPROOF_HTTPS_H
+#ifndef DOMINT_HTTPS_H
+#define DOMINT_HTTPS_H
 
 #include <stddef.h>
 

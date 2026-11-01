@@ -204,7 +204,7 @@ static void print_header(FILE *out, size_t count, const report_options *options)
     strftime(generated, sizeof(generated), "%Y-%m-%d %H:%M %z", &local);
     snprintf(domains, sizeof(domains), "%zu", count);
 
-    fprintf(out, "EXPOSUREPROOF REPORT\n\n");
+    fprintf(out, "DOMINT REPORT\n\n");
     print_field(out, "Generated", generated);
     print_field(out, "Domains", domains);
 
@@ -327,6 +327,44 @@ static void print_summary(FILE *out, const domain_report *report)
     if (report->services.count > 0)
     {
         print_wrapped(out, 2, LABEL_WIDTH, "Services", (const char *const *)report->services.items, report->services.count);
+    }
+
+    if (report->subdomain_status == LOOKUP_SKIPPED)
+    {
+        print_field(out, "Subdomains", "skipped (--no-subdomains)");
+    }
+    else if (report->subdomains.count == 0)
+    {
+        print_field(out, "Subdomains", "none found (passive OSINT)");
+    }
+    else
+    {
+        size_t live = 0;
+        int probed = 0;
+
+        for (size_t i = 0; i < report->subdomains.count; i++)
+        {
+            if (report->subdomains.items[i].probed)
+            {
+                probed = 1;
+
+                if (report->subdomains.items[i].is_live)
+                {
+                    live++;
+                }
+            }
+        }
+
+        if (probed)
+        {
+            snprintf(text, sizeof(text), "%zu active online (%zu discovered)", live, report->subdomains.count);
+        }
+        else
+        {
+            snprintf(text, sizeof(text), "%zu discovered (passive OSINT, not probed)", report->subdomains.count);
+        }
+
+        print_field(out, "Subdomains", text);
     }
 }
 
@@ -735,6 +773,250 @@ static void print_raw(FILE *out, const domain_report *report)
     }
 }
 
+/* Lists the subdomains that were probed without answer (probed = 1) or
+ * that were never probed (probed = 0). */
+static void print_unanswered(FILE *out, const domain_report *report, int probed)
+{
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (sub->probed != probed || (probed && sub->is_live))
+        {
+            continue;
+        }
+
+        if (sub->ip[0] != '\0')
+        {
+            fprintf(out, "    %s (%s)\n", sub->name, sub->ip);
+        }
+        else
+        {
+            fprintf(out, "    %s\n", sub->name);
+        }
+    }
+}
+
+/* "AS8075 Microsoft Azure"; for unknown networks the organization part of
+ * the AS name ("NAME - Org, CC" -> "Org"). */
+static void network_label(const subdomain_info *sub, char *out, size_t size)
+{
+    const char *provider = proxy_provider_name(sub->as_name);
+
+    if (provider == NULL)
+    {
+        provider = cloud_provider_name(sub->as_name);
+    }
+
+    if (provider != NULL)
+    {
+        snprintf(out, size, "AS%s %s", sub->asn, provider);
+        return;
+    }
+
+    const char *name = strstr(sub->as_name, " - ");
+    name = name != NULL ? name + 3 : sub->as_name;
+
+    size_t length = strlen(name);
+    const char *comma = strrchr(name, ',');
+
+    if (comma != NULL && strlen(comma) <= 4)
+    {
+        length = (size_t)(comma - name);
+    }
+
+    snprintf(out, size, "AS%s %.*s", sub->asn, (int)(length > 80 ? 80 : length), name);
+}
+
+/* "www" for "www.example.com" when the report is for example.com. */
+static int short_name(const char *name, const char *domain)
+{
+    size_t name_length = strlen(name);
+    size_t domain_length = strlen(domain);
+
+    if (name_length > domain_length + 1 && strcmp(name + name_length - domain_length, domain) == 0 &&
+        name[name_length - domain_length - 1] == '.')
+    {
+        return (int)(name_length - domain_length - 1);
+    }
+
+    return (int)name_length;
+}
+
+/* Addresses shared by two or more live subdomains: the same server or the
+ * same front end, worth knowing when mapping the infrastructure. */
+static void print_shared_addresses(FILE *out, const domain_report *report)
+{
+    const subdomain_list *subs = &report->subdomains;
+    int header = 0;
+
+    for (size_t i = 0; i < subs->count; i++)
+    {
+        const subdomain_info *first = &subs->items[i];
+        size_t users = 0;
+        int seen = 0;
+
+        if (!first->is_live || first->ip[0] == '\0')
+        {
+            continue;
+        }
+
+        for (size_t j = 0; j < subs->count; j++)
+        {
+            if (subs->items[j].is_live && strcmp(subs->items[j].ip, first->ip) == 0)
+            {
+                seen |= j < i;
+                users++;
+            }
+        }
+
+        if (users < 2 || seen)
+        {
+            continue;
+        }
+
+        if (!header)
+        {
+            fprintf(out, "\n  Shared addresses:\n\n");
+            header = 1;
+        }
+
+        if (first->asn[0] != '\0')
+        {
+            char network[FIELD_SIZE];
+            network_label(first, network, sizeof(network));
+            fprintf(out, "    %s (%s), %zu subdomains: ", first->ip, network, users);
+        }
+        else
+        {
+            fprintf(out, "    %s, %zu subdomains: ", first->ip, users);
+        }
+
+        const char *separator = "";
+
+        for (size_t j = i; j < subs->count; j++)
+        {
+            const subdomain_info *sub = &subs->items[j];
+
+            if (sub->is_live && strcmp(sub->ip, first->ip) == 0)
+            {
+                fprintf(out, "%s%.*s", separator, short_name(sub->name, report->name), sub->name);
+                separator = ", ";
+            }
+        }
+
+        fprintf(out, "\n");
+    }
+}
+
+static void print_subdomains(FILE *out, const domain_report *report)
+{
+    print_section(out, "SUBDOMAINS");
+
+    if (report->subdomain_status == LOOKUP_SKIPPED)
+    {
+        fprintf(out, "  Skipped (--no-subdomains).\n");
+        return;
+    }
+
+    if (report->subdomains.count == 0)
+    {
+        fprintf(out, "  None found in passive OSINT sources.\n");
+        return;
+    }
+
+    size_t live = 0;
+    int probed = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (sub->probed)
+        {
+            probed = 1;
+
+            if (sub->is_live)
+            {
+                live++;
+            }
+        }
+    }
+
+    if (!probed)
+    {
+        fprintf(out, "  Discovered %zu subdomain%s via passive sources (CT logs / OSINT, not probed):\n\n",
+                report->subdomains.count, report->subdomains.count == 1 ? "" : "s");
+        print_unanswered(out, report, 0);
+        return;
+    }
+
+    if (live == 0)
+    {
+        fprintf(out, "  None of the %zu discovered subdomains responded to HTTP/HTTPS.\n", report->subdomains.count);
+    }
+    else
+    {
+        fprintf(out, "  %zu active subdomain%s responding to HTTP/HTTPS (%zu discovered via OSINT):\n\n",
+                live, live == 1 ? "" : "s", report->subdomains.count);
+    }
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (sub->probed && sub->is_live)
+        {
+            char code_str[32];
+            snprintf(code_str, sizeof(code_str), "[%ld]", sub->http_code);
+
+            if (sub->ip[0] != '\0' && sub->asn[0] != '\0')
+            {
+                char network[FIELD_SIZE];
+                network_label(sub, network, sizeof(network));
+                fprintf(out, "    %-6s %s://%s (%s, %s)\n", code_str, sub->protocol, sub->name, sub->ip, network);
+            }
+            else if (sub->ip[0] != '\0')
+            {
+                fprintf(out, "    %-6s %s://%s (%s)\n", code_str, sub->protocol, sub->name, sub->ip);
+            }
+            else
+            {
+                fprintf(out, "    %-6s %s://%s\n", code_str, sub->protocol, sub->name);
+            }
+        }
+    }
+
+    print_shared_addresses(out, report);
+
+    size_t silent = 0;
+    size_t skipped = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        if (!report->subdomains.items[i].probed)
+        {
+            skipped++;
+        }
+        else if (!report->subdomains.items[i].is_live)
+        {
+            silent++;
+        }
+    }
+
+    if (silent > 0)
+    {
+        fprintf(out, "\n  No HTTP/HTTPS response (%zu):\n\n", silent);
+        print_unanswered(out, report, 1);
+    }
+
+    if (skipped > 0)
+    {
+        fprintf(out, "\n  Not probed, over the probe limit (%zu):\n\n", skipped);
+        print_unanswered(out, report, 0);
+    }
+}
+
 static void print_domain(FILE *out, const domain_report *report, const report_options *options)
 {
     fprintf(out, "\n\n%s\n%s\n%s\n", RULE, report->name, RULE);
@@ -742,22 +1024,22 @@ static void print_domain(FILE *out, const domain_report *report, const report_op
     print_summary(out, report);
     print_signals(out, report);
 
-    if (!options->full)
+    if (options->full)
     {
-        return;
+        print_addresses(out, report);
+        print_http(out, report);
+        print_tls(out, report);
+        print_dns(out, report);
+        print_whois(out, report);
+        print_sources(out, report);
+
+        if (options->raw)
+        {
+            print_raw(out, report);
+        }
     }
 
-    print_addresses(out, report);
-    print_http(out, report);
-    print_tls(out, report);
-    print_dns(out, report);
-    print_whois(out, report);
-    print_sources(out, report);
-
-    if (options->raw)
-    {
-        print_raw(out, report);
-    }
+    print_subdomains(out, report);
 }
 
 static const char *strength_title(link_strength strength)
@@ -843,6 +1125,54 @@ static void print_correlation(FILE *out, const domain_report *reports, size_t co
     free(names);
 }
 
+static void print_all_subdomains(FILE *out, const domain_report *reports, size_t count)
+{
+    size_t total = 0;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        total += reports[i].subdomains.count;
+    }
+
+    if (total == 0)
+    {
+        return;
+    }
+
+    print_section(out, "SUBDOMAIN INVESTIGATION SUMMARY");
+    fprintf(out, "  Total subdomains discovered across %zu targets: %zu\n\n", count, total);
+
+    for (size_t i = 0; i < count; i++)
+    {
+        if (reports[i].subdomains.count > 0)
+        {
+            fprintf(out, "  %s (%zu subdomain%s):\n",
+                    reports[i].name, reports[i].subdomains.count,
+                    reports[i].subdomains.count == 1 ? "" : "s");
+
+            for (size_t j = 0; j < reports[i].subdomains.count; j++)
+            {
+                const subdomain_info *sub = &reports[i].subdomains.items[j];
+
+                if (sub->probed && sub->is_live)
+                {
+                    char code_str[24];
+
+                    snprintf(code_str, sizeof(code_str), "[%ld]", sub->http_code);
+
+                    fprintf(out, "    - %-6s %s://%s\n", code_str, sub->protocol, sub->name);
+                }
+                else if (!sub->probed)
+                {
+                    fprintf(out, "    - %s\n", sub->name);
+                }
+            }
+
+            fprintf(out, "\n");
+        }
+    }
+}
+
 void print_report(FILE *out, const domain_report *reports, size_t count, const correlation *links,
                   const report_options *options)
 {
@@ -861,5 +1191,6 @@ void print_report(FILE *out, const domain_report *reports, size_t count, const c
     if (count > 1)
     {
         print_correlation(out, reports, count, links);
+        print_all_subdomains(out, reports, count);
     }
 }

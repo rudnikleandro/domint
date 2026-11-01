@@ -6,7 +6,7 @@
 CFLAGS = -O2 -Wall -Wextra -Werror -MMD -MP
 LDLIBS = -lresolv -lcurl
 
-TARGET = exposureproof
+TARGET = domint
 SRC_DIR = src
 BUILD_DIR = build
 

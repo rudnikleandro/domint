@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_JSON_H
-#define EXPOSUREPROOF_JSON_H
+#ifndef DOMINT_JSON_H
+#define DOMINT_JSON_H
 
 #include <stddef.h>
 

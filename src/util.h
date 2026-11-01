@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_UTIL_H
-#define EXPOSUREPROOF_UTIL_H
+#ifndef DOMINT_UTIL_H
+#define DOMINT_UTIL_H
 
 #include <stddef.h>
 

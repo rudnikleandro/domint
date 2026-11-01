@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_WHOIS_H
-#define EXPOSUREPROOF_WHOIS_H
+#ifndef DOMINT_WHOIS_H
+#define DOMINT_WHOIS_H
 
 #include <stddef.h>
 

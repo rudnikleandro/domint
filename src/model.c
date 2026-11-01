@@ -65,6 +65,64 @@ void string_list_free(string_list *list)
     list->capacity = 0;
 }
 
+void subdomain_list_add(subdomain_list *list, const char *name)
+{
+    if (list->count == list->capacity)
+    {
+        list->capacity = list->capacity == 0 ? 8 : list->capacity * 2;
+        list->items = xrealloc(list->items, list->capacity * sizeof(*list->items));
+    }
+
+    subdomain_info *item = &list->items[list->count];
+    memset(item, 0, sizeof(*item));
+    snprintf(item->name, sizeof(item->name), "%s", name);
+    list->count++;
+}
+
+void subdomain_list_add_unique(subdomain_list *list, const char *name)
+{
+    if (!subdomain_list_contains(list, name))
+    {
+        subdomain_list_add(list, name);
+    }
+}
+
+int subdomain_list_contains(const subdomain_list *list, const char *name)
+{
+    for (size_t i = 0; i < list->count; i++)
+    {
+        if (strcasecmp(list->items[i].name, name) == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int compare_subdomains(const void *a, const void *b)
+{
+    const subdomain_info *sub_a = a;
+    const subdomain_info *sub_b = b;
+    return strcasecmp(sub_a->name, sub_b->name);
+}
+
+void subdomain_list_sort(subdomain_list *list)
+{
+    if (list->count > 1)
+    {
+        qsort(list->items, list->count, sizeof(*list->items), compare_subdomains);
+    }
+}
+
+void subdomain_list_free(subdomain_list *list)
+{
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
 void observation_list_free(observation_list *list)
 {
     for (size_t i = 0; i < list->count; i++)
@@ -156,4 +214,5 @@ void domain_report_free(domain_report *report)
     string_list_free(&report->dns.dnskey.values);
     string_list_free(&report->whois.statuses);
     string_list_free(&report->services);
+    subdomain_list_free(&report->subdomains);
 }

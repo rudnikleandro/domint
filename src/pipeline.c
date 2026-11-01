@@ -8,10 +8,11 @@
 #include "http.h"
 #include "rdap.h"
 #include "resolve.h"
+#include "subdomain.h"
 #include "tls.h"
 #include "whois.h"
 
-void collect_domain(domain_report *report, int passive, const struct in_addr *custom_resolver)
+void collect_domain(domain_report *report, int passive, int no_subdomains, int no_probe, const struct in_addr *custom_resolver)
 {
     observation_list *observations = &report->observations;
 
@@ -46,6 +47,19 @@ void collect_domain(domain_report *report, int passive, const struct in_addr *cu
     {
         whois_collect(report->org_domain, observations);
     }
+
+    if (no_subdomains)
+    {
+        record_observation(observations, SUBDOMAIN_COLLECTOR, "osint", report->name, OBS_NOT_QUERIED,
+                           "--no-subdomains: passive subdomain scan skipped", NULL, 0);
+    }
+    else
+    {
+        subdomain_collect(report->name, observations);
+        subdomain_interpret(report->name, observations, &report->subdomains, &report->subdomain_status);
+        subdomain_probe(&report->subdomains, passive, no_probe, observations, report->name);
+        asn_collect_subdomains(&report->subdomains, observations);
+    }
 }
 
 void interpret_domain(domain_report *report)
@@ -69,6 +83,9 @@ void interpret_domain(domain_report *report)
     {
         whois_interpret(report->org_domain, observations, &report->whois);
     }
+
+    subdomain_interpret(report->name, observations, &report->subdomains, &report->subdomain_status);
+    asn_interpret_subdomains(observations, &report->subdomains);
 
     analyze_domain(report);
 }

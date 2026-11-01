@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_TEST_H
-#define EXPOSUREPROOF_TEST_H
+#ifndef DOMINT_TEST_H
+#define DOMINT_TEST_H
 
 #include <stdio.h>
 #include <string.h>
@@ -64,5 +64,6 @@ void test_dns_packet(void);
 void test_json(void);
 void test_sources(void);
 void test_source_signals(void);
+void test_subdomains(void);
 
 #endif

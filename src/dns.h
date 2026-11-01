@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_DNS_H
-#define EXPOSUREPROOF_DNS_H
+#ifndef DOMINT_DNS_H
+#define DOMINT_DNS_H
 
 #include <netinet/in.h>
 #include <stddef.h>

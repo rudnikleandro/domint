@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_RESOLVE_H
-#define EXPOSUREPROOF_RESOLVE_H
+#ifndef DOMINT_RESOLVE_H
+#define DOMINT_RESOLVE_H
 
 #include "model.h"
 

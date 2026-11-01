@@ -102,7 +102,7 @@ https_response https_get(const char *url, size_t max_size)
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
 
-    struct curl_slist *headers = curl_slist_append(NULL, "Accept: application/rdap+json, application/json");
+    struct curl_slist *headers = curl_slist_append(NULL, "Accept: application/rdap+json, application/json, text/plain, */*");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
     CURLcode code = curl_easy_perform(curl);

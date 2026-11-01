@@ -43,6 +43,42 @@ void asn_collect(const char *ip, observation_list *observations)
     free(response.data);
 }
 
+void asn_collect_subdomains(const subdomain_list *subdomains, observation_list *observations)
+{
+    for (size_t i = 0; i < subdomains->count; i++)
+    {
+        const subdomain_info *sub = &subdomains->items[i];
+
+        if (sub->is_live && sub->ip[0] != '\0' && find_observation(observations, ASN_COLLECTOR, sub->ip) == NULL)
+        {
+            asn_collect(sub->ip, observations);
+        }
+    }
+}
+
+void asn_interpret_subdomains(const observation_list *observations, subdomain_list *subdomains)
+{
+    for (size_t i = 0; i < subdomains->count; i++)
+    {
+        subdomain_info *sub = &subdomains->items[i];
+        address_info address = {0};
+
+        if (sub->ip[0] == '\0')
+        {
+            continue;
+        }
+
+        snprintf(address.ip, sizeof(address.ip), "%s", sub->ip);
+        asn_interpret(observations, &address);
+
+        if (address.asn_status == LOOKUP_OK && address.announced)
+        {
+            snprintf(sub->asn, sizeof(sub->asn), "%s", address.asn);
+            snprintf(sub->as_name, sizeof(sub->as_name), "%s", address.as_name);
+        }
+    }
+}
+
 void asn_interpret(const observation_list *observations, address_info *address)
 {
     const observation *item = find_observation(observations, ASN_COLLECTOR, address->ip);

@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_CORRELATE_H
-#define EXPOSUREPROOF_CORRELATE_H
+#ifndef DOMINT_CORRELATE_H
+#define DOMINT_CORRELATE_H
 
 #include <stddef.h>
 #include <stdint.h>

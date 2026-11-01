@@ -857,6 +857,273 @@ static void analyze_dns(domain_report *report)
     }
 }
 
+/* Development, test and homologation names: a label equal to a short
+ * keyword ("dev", "qa") or containing a long one ("homol-api"). */
+static int is_non_production(const char *name, const char *domain)
+{
+    static const char *const exact[] = {"dev", "develop", "development", "test", "testing", "tst", "qa",
+                                        "uat", "hml", "hom", "stg", "stage", "lab", "demo", "beta", "sandbox"};
+    static const char *const partial[] = {"staging", "stagging", "homolog", "homol", "preprod", "sandbox"};
+    size_t name_length = strlen(name);
+    size_t domain_length = strlen(domain);
+
+    if (name_length <= domain_length + 1)
+    {
+        return 0;
+    }
+
+    /* Only the labels in front of the investigated domain. */
+    size_t prefix_length = name_length - domain_length - 1;
+    char prefix[DOMAIN_SIZE];
+    snprintf(prefix, sizeof(prefix), "%.*s", (int)prefix_length, name);
+    to_lower(prefix);
+
+    for (size_t i = 0; i < COUNT(partial); i++)
+    {
+        if (strstr(prefix, partial[i]) != NULL)
+        {
+            return 1;
+        }
+    }
+
+    char *saveptr = NULL;
+
+    for (char *token = strtok_r(prefix, ".-_", &saveptr); token != NULL; token = strtok_r(NULL, ".-_", &saveptr))
+    {
+        /* "dev2", "qa01": trailing digits do not change the meaning. */
+        size_t length = strlen(token);
+
+        while (length > 0 && token[length - 1] >= '0' && token[length - 1] <= '9')
+        {
+            length--;
+        }
+
+        token[length] = '\0';
+
+        for (size_t i = 0; i < COUNT(exact); i++)
+        {
+            if (strcmp(token, exact[i]) == 0)
+            {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* Non-production environments answering on the internet: usually less
+ * hardened and monitored than production. */
+static void analyze_non_production(domain_report *report)
+{
+    char list[384] = "";
+    size_t found = 0;
+    int reachable = 0;
+    int probed = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        probed |= sub->probed;
+
+        if ((sub->probed && !sub->is_live) || !is_non_production(sub->name, report->name))
+        {
+            continue;
+        }
+
+        char entry[DOMAIN_SIZE + 16];
+
+        if (sub->probed)
+        {
+            snprintf(entry, sizeof(entry), "%s%s (%ld)", found > 0 ? ", " : "", sub->name, sub->http_code);
+            reachable |= sub->http_code == 200;
+        }
+        else
+        {
+            snprintf(entry, sizeof(entry), "%s%s", found > 0 ? ", " : "", sub->name);
+        }
+
+        if (strlen(list) + strlen(entry) + 4 < sizeof(list))
+        {
+            strcat(list, entry);
+        }
+        else if (strstr(list, "...") == NULL)
+        {
+            strcat(list, ", ...");
+        }
+
+        found++;
+    }
+
+    if (found == 0)
+    {
+        return;
+    }
+
+    if (probed)
+    {
+        add_finding(report, reachable ? SEVERITY_MEDIUM : SEVERITY_LOW,
+                    "%zu non-production environment%s (dev/test/homologation) answer%s on the internet: %s.", found,
+                    found == 1 ? "" : "s", found == 1 ? "s" : "", list);
+    }
+    else
+    {
+        add_finding(report, SEVERITY_INFO, "%zu non-production environment name%s (dev/test/homologation) in public records: %s.",
+                    found, found == 1 ? "" : "s", list);
+    }
+}
+
+static void analyze_subdomains(domain_report *report)
+{
+    if (report->subdomains.count == 0)
+    {
+        return;
+    }
+
+    size_t live_count = 0;
+    size_t accessible_count = 0;
+    size_t restricted_count = 0;
+    size_t redirect_count = 0;
+    int any_probed = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (sub->probed)
+        {
+            any_probed = 1;
+
+            if (sub->is_live)
+            {
+                live_count++;
+
+                if (sub->http_code == 200)
+                {
+                    accessible_count++;
+                }
+                else if (sub->http_code == 401 || sub->http_code == 403)
+                {
+                    restricted_count++;
+                }
+                else if (sub->http_code >= 300 && sub->http_code < 400)
+                {
+                    redirect_count++;
+                }
+            }
+        }
+    }
+
+    if (any_probed)
+    {
+        add_finding(report, SEVERITY_INFO,
+                    "Subdomain liveness check: %zu of %zu subdomain%s online (%zu accessible, %zu restricted, %zu redirect%s).",
+                    live_count, report->subdomains.count, report->subdomains.count == 1 ? "" : "s",
+                    accessible_count, restricted_count, redirect_count, redirect_count == 1 ? "" : "s");
+    }
+    else
+    {
+        add_finding(report, SEVERITY_INFO,
+                    "Passive OSINT enumeration discovered %zu subdomain%s in Certificate Transparency and passive DNS logs.",
+                    report->subdomains.count, report->subdomains.count == 1 ? "" : "s");
+    }
+
+    static const char *const sensitive_keywords[] = {
+        "vpn", "admin", "internal",
+        "corp", "portal", "cpanel", "jenkins", "jira", "grafana", "gitlab"
+    };
+
+    string_list sensitive = {0};
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (sub->is_live && sub->title[0] != '\0')
+        {
+            if (strstr(sub->title, "Index of /") != NULL || strstr(sub->title, "Directory Listing") != NULL)
+            {
+                add_finding(report, SEVERITY_HIGH,
+                            "Subdomain exposes open directory listing: %s (Title: \"%s\").",
+                            sub->name, sub->title);
+            }
+        }
+
+        for (size_t k = 0; k < COUNT(sensitive_keywords); k++)
+        {
+            if (strstr(sub->name, sensitive_keywords[k]) != NULL)
+            {
+                if (sub->probed && sub->is_live)
+                {
+                    if (sub->http_code == 200)
+                    {
+                        char extra[FIELD_SIZE + 16] = "";
+
+                        if (sub->title[0] != '\0')
+                        {
+                            snprintf(extra, sizeof(extra), ", title: \"%s\"", sub->title);
+                        }
+                        else if (sub->server[0] != '\0')
+                        {
+                            snprintf(extra, sizeof(extra), ", server: %s", sub->server);
+                        }
+
+                        add_finding(report, SEVERITY_MEDIUM,
+                                    "Sensitive subdomain is actively online and accessible without restriction: %s (HTTP 200 OK%s).",
+                                    sub->name, extra);
+                    }
+                    else if (sub->http_code == 401 || sub->http_code == 403)
+                    {
+                        add_finding(report, SEVERITY_LOW,
+                                    "Sensitive subdomain is online with access control enforced: %s (HTTP %ld).",
+                                    sub->name, sub->http_code);
+                    }
+                    else if (sub->http_code >= 300 && sub->http_code < 400 && sub->location[0] != '\0')
+                    {
+                        add_finding(report, SEVERITY_INFO,
+                                    "Sensitive subdomain is online and redirects: %s (HTTP %ld -> %s).",
+                                    sub->name, sub->http_code, sub->location);
+                    }
+                }
+                else if (!sub->probed)
+                {
+                    string_list_add_unique(&sensitive, sub->name);
+                }
+                break;
+            }
+        }
+    }
+
+    if (!any_probed && sensitive.count > 0)
+    {
+        char sample[256] = "";
+        size_t shown = sensitive.count > 3 ? 3 : sensitive.count;
+
+        for (size_t i = 0; i < shown; i++)
+        {
+            strncat(sample, sensitive.items[i], sizeof(sample) - strlen(sample) - 1);
+
+            if (i + 1 < shown)
+            {
+                strncat(sample, ", ", sizeof(sample) - strlen(sample) - 1);
+            }
+        }
+
+        if (sensitive.count > 3)
+        {
+            strncat(sample, "...", sizeof(sample) - strlen(sample) - 1);
+        }
+
+        add_finding(report, SEVERITY_LOW,
+                    "Potentially sensitive or internal subdomains exposed in public logs (%zu found: %s).",
+                    sensitive.count, sample);
+    }
+
+    string_list_free(&sensitive);
+    analyze_non_production(report);
+}
+
 /* Most severe first. Insertion sort because it is stable: signals of equal
  * severity keep the order they were found in, so reports are reproducible. */
 static void sort_findings(domain_report *report)
@@ -887,5 +1154,6 @@ void analyze_domain(domain_report *report)
     analyze_web(report);
     analyze_tls(report, now);
     analyze_dns(report);
+    analyze_subdomains(report);
     sort_findings(report);
 }

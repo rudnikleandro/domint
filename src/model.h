@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_MODEL_H
-#define EXPOSUREPROOF_MODEL_H
+#ifndef DOMINT_MODEL_H
+#define DOMINT_MODEL_H
 
 #include <stddef.h>
 
@@ -9,7 +9,7 @@
 #define MAX_ADDRESSES 32
 #define MAX_FINDINGS 32
 
-#define EXPOSUREPROOF_VERSION "0.3.0"
+#define DOMINT_VERSION "0.3.0"
 
 /* Zero is SKIPPED, so a zero-initialized report means "nothing ran yet". */
 typedef enum
@@ -25,6 +25,29 @@ typedef struct
     size_t capacity;
     char **items;
 } string_list;
+
+typedef struct
+{
+    char name[DOMAIN_SIZE];
+    int probed;            /* 1 if probed for HTTP liveness, 0 otherwise */
+    int is_live;           /* 1 if responded to HTTP/HTTPS, 0 if unreachable */
+    long http_code;        /* e.g. 200, 403, 301, 404, 500, or 0 */
+    char protocol[8];      /* "https" or "http" */
+    char ip[IP_SIZE];      /* IP address connected to */
+    char asn[16];          /* network announcing `ip`, from Team Cymru */
+    char as_name[FIELD_SIZE];
+    char location[256];    /* Location header for redirects */
+    char server[FIELD_SIZE];/* Server banner header */
+    char title[FIELD_SIZE]; /* HTML <title> tag content */
+    char error[FIELD_SIZE];/* Error message if unreachable */
+} subdomain_info;
+
+typedef struct
+{
+    size_t count;
+    size_t capacity;
+    subdomain_info *items;
+} subdomain_list;
 
 typedef struct
 {
@@ -186,6 +209,10 @@ typedef struct
     size_t finding_count;
     finding findings[MAX_FINDINGS];
 
+    /* Discovered subdomains from passive OSINT and liveness status. */
+    lookup_status subdomain_status;
+    subdomain_list subdomains;
+
     double elapsed_seconds;
 } domain_report;
 
@@ -194,6 +221,12 @@ void string_list_add_unique(string_list *list, const char *value);
 int string_list_contains(const string_list *list, const char *value);
 void string_list_sort(string_list *list);
 void string_list_free(string_list *list);
+
+void subdomain_list_add(subdomain_list *list, const char *name);
+void subdomain_list_add_unique(subdomain_list *list, const char *name);
+int subdomain_list_contains(const subdomain_list *list, const char *name);
+void subdomain_list_sort(subdomain_list *list);
+void subdomain_list_free(subdomain_list *list);
 
 /* Appends an observation stamped with the current UTC time; `content`
  * (may be NULL) is copied byte for byte. */

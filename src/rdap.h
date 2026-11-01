@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_RDAP_H
-#define EXPOSUREPROOF_RDAP_H
+#ifndef DOMINT_RDAP_H
+#define DOMINT_RDAP_H
 
 #include <stddef.h>
 

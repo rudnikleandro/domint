@@ -57,6 +57,7 @@ int main(void)
         {"json", test_json},
         {"sources", test_sources},
         {"source_signals", test_source_signals},
+        {"subdomains", test_subdomains},
     };
 
     for (size_t i = 0; i < sizeof(suites) / sizeof(suites[0]); i++)

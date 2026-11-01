@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_DOMAIN_H
-#define EXPOSUREPROOF_DOMAIN_H
+#ifndef DOMINT_DOMAIN_H
+#define DOMINT_DOMAIN_H
 
 #include <stddef.h>
 

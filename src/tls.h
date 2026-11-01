@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_TLS_H
-#define EXPOSUREPROOF_TLS_H
+#ifndef DOMINT_TLS_H
+#define DOMINT_TLS_H
 
 #include <stddef.h>
 #include <time.h>

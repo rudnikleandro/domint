@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_ANALYSIS_H
-#define EXPOSUREPROOF_ANALYSIS_H
+#ifndef DOMINT_ANALYSIS_H
+#define DOMINT_ANALYSIS_H
 
 #include <stddef.h>
 #include <time.h>

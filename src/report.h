@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_REPORT_H
-#define EXPOSUREPROOF_REPORT_H
+#ifndef DOMINT_REPORT_H
+#define DOMINT_REPORT_H
 
 #include <stddef.h>
 #include <stdio.h>

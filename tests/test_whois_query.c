@@ -37,6 +37,7 @@ static pid_t serve_once(size_t size, char *port, size_t port_size)
     {
         /* The client hangs up early when the answer is too large. */
         signal(SIGPIPE, SIG_IGN);
+        alarm(3);
 
         int client = accept(listener, NULL, NULL);
         char query[256];

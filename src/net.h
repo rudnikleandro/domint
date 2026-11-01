@@ -1,5 +1,5 @@
-#ifndef EXPOSUREPROOF_NET_H
-#define EXPOSUREPROOF_NET_H
+#ifndef DOMINT_NET_H
+#define DOMINT_NET_H
 
 #include <stddef.h>
 #include <sys/socket.h>

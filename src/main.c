@@ -19,6 +19,8 @@ typedef struct
     int passive;
     int full;
     int raw;
+    int no_subdomains;
+    int no_probe;
     const char *resolver;
     const char *input_file;
     const char *output_file;
@@ -35,6 +37,8 @@ static void print_usage(FILE *out, const char *program)
     fprintf(out, "      --full             Include the collected data and every source queried\n");
     fprintf(out, "      --raw              Also append the raw WHOIS and HTTP responses\n");
     fprintf(out, "      --passive          Do not contact the targets (skips the HTTP request)\n");
+    fprintf(out, "      --no-subdomains    Skip passive subdomain enumeration\n");
+    fprintf(out, "      --no-probe         Skip HTTP/HTTPS liveness probing of subdomains\n");
     fprintf(out, "      --resolver <ipv4>  Send the DNS record queries to this resolver; it will\n");
     fprintf(out, "                         see which domains you investigate\n");
     fprintf(out, "  -h, --help             Show this help\n");
@@ -120,6 +124,14 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         else if (strcmp(arg, "--passive") == 0)
         {
             opts->passive = 1;
+        }
+        else if (strcmp(arg, "--no-subdomains") == 0)
+        {
+            opts->no_subdomains = 1;
+        }
+        else if (strcmp(arg, "--no-probe") == 0)
+        {
+            opts->no_probe = 1;
         }
         else if (strcmp(arg, "--full") == 0)
         {
@@ -236,7 +248,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "[%zu/%zu] %s ... ", i + 1, domains.count, report->name);
 
         clock_gettime(CLOCK_MONOTONIC, &start);
-        collect_domain(report, opts.passive, custom_resolver);
+        collect_domain(report, opts.passive, opts.no_subdomains, opts.no_probe, custom_resolver);
         interpret_domain(report);
 
         fprintf(stderr, "done (%.1fs)\n", seconds_since(&start));

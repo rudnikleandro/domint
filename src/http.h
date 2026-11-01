@@ -1,11 +1,11 @@
-#ifndef EXPOSUREPROOF_HTTP_H
-#define EXPOSUREPROOF_HTTP_H
+#ifndef DOMINT_HTTP_H
+#define DOMINT_HTTP_H
 
 #include <stddef.h>
 
 #include "model.h"
 
-#define HTTP_USER_AGENT "ExposureProof-C/0.3"
+#define HTTP_USER_AGENT "domint/0.3"
 #define HTTP_COLLECTOR "http"
 
 /* Sends one HEAD request to the first address that answers on port 80,

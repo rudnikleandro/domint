@@ -9,7 +9,7 @@
 
 static void out_of_memory(void)
 {
-    fprintf(stderr, "exposureproof: out of memory\n");
+    fprintf(stderr, "domint: out of memory\n");
     exit(1);
 }
 
