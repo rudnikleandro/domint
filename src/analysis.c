@@ -9,6 +9,7 @@
 
 #include "dns.h"
 #include "domain.h"
+#include "tls.h"
 #include "util.h"
 
 #define SECONDS_PER_DAY 86400
@@ -16,6 +17,7 @@
 #define YOUNG_DOMAIN_DAYS 180
 #define EXPIRY_WARNING_DAYS 30
 #define EXPIRY_IMMINENT_DAYS 7
+#define CERTIFICATE_WARNING_DAYS 14
 #define TXT_COPY_SIZE 2048
 
 #define COUNT(array) (sizeof(array) / sizeof((array)[0]))
@@ -470,6 +472,38 @@ static void analyze_registration(domain_report *report, time_t now)
         }
     }
 
+    /* Status codes are written "clientHold" in EPP/WHOIS and "client hold"
+     * in RDAP; compare them without spaces or case. */
+    for (size_t i = 0; i < whois->statuses.count; i++)
+    {
+        const char *status = whois->statuses.items[i];
+        char compact[FIELD_SIZE];
+        size_t length = 0;
+
+        for (const char *c = status; *c != '\0' && length < sizeof(compact) - 1; c++)
+        {
+            if (*c != ' ')
+            {
+                compact[length++] = *c;
+            }
+        }
+
+        compact[length] = '\0';
+
+        if (strcasecmp(compact, "clientHold") == 0 || strcasecmp(compact, "serverHold") == 0)
+        {
+            add_finding(report, SEVERITY_MEDIUM,
+                        "The registry lists the domain as \"%s\": it is withdrawn from DNS, which usually follows a "
+                        "takedown, a dispute or unpaid fees.",
+                        status);
+        }
+        else if (strcasecmp(compact, "pendingDelete") == 0 || strcasecmp(compact, "redemptionPeriod") == 0)
+        {
+            add_finding(report, SEVERITY_MEDIUM,
+                        "The domain is being deleted (\"%s\"); it will soon be open for anyone to register.", status);
+        }
+    }
+
     if (whois->privacy)
     {
         add_finding(report, SEVERITY_INFO, "The registrant's identity is hidden behind a privacy service.");
@@ -739,6 +773,39 @@ static void analyze_web(domain_report *report)
     }
 }
 
+static void analyze_tls(domain_report *report, time_t now)
+{
+    const tls_info *tls = &report->tls;
+    time_t until;
+
+    if (tls->status != LOOKUP_OK)
+    {
+        return;
+    }
+
+    int dated = tls_parse_time(tls->valid_until, &until) == 0;
+    long days_left = dated ? (long)((until - now) / SECONDS_PER_DAY) : 0;
+
+    if (dated && until < now)
+    {
+        add_finding(report, SEVERITY_MEDIUM,
+                    "The TLS certificate expired %ld day%s ago (%s); visitors get a warning, which often means the "
+                    "site is no longer maintained.",
+                    -days_left, days_left == -1 ? "" : "s", tls->valid_until);
+    }
+    else if (!tls->trusted)
+    {
+        add_finding(report, SEVERITY_MEDIUM,
+                    "The TLS certificate is not trusted (%s): self-signed, wrong name or incomplete chain.",
+                    tls->trust_error);
+    }
+    else if (dated && days_left <= CERTIFICATE_WARNING_DAYS)
+    {
+        add_finding(report, SEVERITY_LOW, "The TLS certificate expires in %ld day%s (%s).", days_left,
+                    days_left == 1 ? "" : "s", tls->valid_until);
+    }
+}
+
 static void analyze_dns(domain_report *report)
 {
     const dns_info *dns = &report->dns;
@@ -770,6 +837,24 @@ static void analyze_dns(domain_report *report)
     {
         add_finding(report, SEVERITY_INFO, "DNS lookups failed for %s; those records are missing from this report.", failed);
     }
+
+    /* DNSSEC: DS at the parent with no DNSKEY in the zone breaks resolution
+     * for validating resolvers; no DS at all just means unsigned. */
+    if (dns->ds.status == LOOKUP_OK && dns->dnskey.status == LOOKUP_OK && report->whois.registered)
+    {
+        if (dns->ds.values.count > 0 && dns->dnskey.values.count == 0)
+        {
+            add_finding(report, SEVERITY_MEDIUM,
+                        "DNSSEC is broken: the registry publishes DS records but the zone has no DNSKEY, so validating "
+                        "resolvers will refuse to resolve %s.",
+                        report->org_domain);
+        }
+        else if (dns->ds.values.count == 0)
+        {
+            add_finding(report, SEVERITY_INFO,
+                        "Not signed with DNSSEC: anyone able to tamper with DNS traffic can forge answers for this domain.");
+        }
+    }
 }
 
 /* Most severe first. Insertion sort because it is stable: signals of equal
@@ -800,6 +885,7 @@ void analyze_domain(domain_report *report)
     analyze_addresses(report);
     analyze_email(report);
     analyze_web(report);
+    analyze_tls(report, now);
     analyze_dns(report);
     sort_findings(report);
 }

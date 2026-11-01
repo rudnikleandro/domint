@@ -4,7 +4,7 @@
 # -MMD -MP write a .d file per object listing the headers it includes, so
 # editing a header rebuilds every .c that depends on it.
 CFLAGS = -O2 -Wall -Wextra -Werror -MMD -MP
-LDLIBS = -lresolv
+LDLIBS = -lresolv -lcurl
 
 TARGET = exposureproof
 SRC_DIR = src

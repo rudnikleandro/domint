@@ -152,5 +152,8 @@ void domain_report_free(domain_report *report)
     string_list_free(&report->dns.txt.values);
     string_list_free(&report->dns.caa.values);
     string_list_free(&report->dns.dmarc.values);
+    string_list_free(&report->dns.ds.values);
+    string_list_free(&report->dns.dnskey.values);
+    string_list_free(&report->whois.statuses);
     string_list_free(&report->services);
 }

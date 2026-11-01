@@ -47,6 +47,7 @@ static const char *const updated_fields[] = {"Updated Date:", "Last Updated On:"
 static const char *const registrant_fields[] = {"Registrant Organization:", "Registrant Organisation:",
                                                 "Registrant Name:", "Registrant:", "owner:", "org-name:", NULL};
 static const char *const country_fields[] = {"Registrant Country:", NULL};
+static const char *const abuse_fields[] = {"Registrar Abuse Contact Email:", "abuse-mailbox:", NULL};
 
 static const char *const not_found_markers[] = {"No match for", "NOT FOUND", "No Data Found", "No entries found",
                                                 "Domain not found", "No Object Found", "no matching objects",
@@ -233,6 +234,34 @@ static void extract_first(const char *response, const char *const *fields, char 
     }
 }
 
+/* Every "Domain Status:" line, keeping the code and dropping the ICANN link:
+ * "clientDeleteProhibited https://icann.org/epp#..." -> "clientDeleteProhibited". */
+static void read_statuses(const char *response, whois_info *info)
+{
+    const char *line = response;
+
+    while (line != NULL && *line != '\0')
+    {
+        const char *next_line = strchr(line, '\n');
+        const char *text = line + strspn(line, " \t");
+
+        if (strncasecmp(text, "Domain Status:", 14) == 0)
+        {
+            const char *value = text + 14 + strspn(text + 14, " \t");
+            size_t length = strcspn(value, " \t\r\n");
+
+            if (length > 0 && length < FIELD_SIZE)
+            {
+                char status[FIELD_SIZE];
+                snprintf(status, sizeof(status), "%.*s", (int)length, value);
+                string_list_add_unique(&info->statuses, status);
+            }
+        }
+
+        line = next_line != NULL ? next_line + 1 : NULL;
+    }
+}
+
 static int contains_any(const char *text, const char *const *markers)
 {
     for (; *markers != NULL; markers++)
@@ -344,6 +373,7 @@ void whois_interpret(const char *domain, const observation_list *observations, w
     const observation *registry = find_observation(observations, WHOIS_COLLECTOR, domain);
 
     snprintf(info->queried, sizeof(info->queried), "%s", domain);
+    snprintf(info->protocol, sizeof(info->protocol), "WHOIS");
     info->status = LOOKUP_FAILED;
     info->iana_queried = iana != NULL && strcmp(iana->detail, WHOIS_CACHED_DETAIL) != 0;
 
@@ -407,6 +437,13 @@ void whois_parse(const char *response, whois_info *info)
     extract_first(response, expires_fields, info->expires, sizeof(info->expires));
     extract_first(response, registrant_fields, info->registrant, sizeof(info->registrant));
     extract_first(response, country_fields, info->registrant_country, sizeof(info->registrant_country));
+    extract_first(response, abuse_fields, info->abuse_email, sizeof(info->abuse_email));
+    read_statuses(response, info);
 
-    info->privacy = info->registrant[0] != '\0' && contains_any(info->registrant, privacy_markers);
+    info->privacy = looks_redacted(info->registrant);
+}
+
+int looks_redacted(const char *registrant)
+{
+    return registrant[0] != '\0' && contains_any(registrant, privacy_markers);
 }

@@ -67,6 +67,8 @@ typedef struct
     record_set caa;
     record_set dmarc;
     char dmarc_name[DOMAIN_SIZE + 8];
+    record_set ds;
+    record_set dnskey;
     lookup_status soa_status;
     int has_soa;
     char soa_primary[FIELD_SIZE];
@@ -74,9 +76,11 @@ typedef struct
     unsigned long soa_serial;
 } dns_info;
 
+/* Registration data, from RDAP when the registry offers it, else WHOIS. */
 typedef struct
 {
     lookup_status status;
+    char protocol[8];
     char note[FIELD_SIZE * 4];
     char queried[DOMAIN_SIZE];
     int iana_queried;
@@ -89,8 +93,25 @@ typedef struct
     char registrant[FIELD_SIZE];
     char registrant_country[64];
     int privacy;
+    char abuse_email[FIELD_SIZE];
+    string_list statuses;
     char *raw;
 } whois_info;
+
+typedef struct
+{
+    lookup_status status;
+    int not_queried;
+    char endpoint[FIELD_SIZE];
+    int trusted;
+    char trust_error[FIELD_SIZE * 2];
+    char subject[FIELD_SIZE * 2];
+    char issuer[FIELD_SIZE * 2];
+    char valid_from[64];
+    char valid_until[64];
+    char signature[FIELD_SIZE];
+    char serial[FIELD_SIZE];
+} tls_info;
 
 /* What happened when a source was asked. These are deliberately distinct:
  * "the source said there is nothing" is not "the source did not answer". */
@@ -149,6 +170,7 @@ typedef struct
     address_info addresses[MAX_ADDRESSES];
 
     http_info http;
+    tls_info tls;
     dns_info dns;
     whois_info whois;
 

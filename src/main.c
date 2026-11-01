@@ -8,6 +8,7 @@
 
 #include "correlate.h"
 #include "domain.h"
+#include "https.h"
 #include "model.h"
 #include "pipeline.h"
 #include "report.h"
@@ -202,6 +203,13 @@ int main(int argc, char *argv[])
         custom_resolver = &resolver_addr;
     }
 
+    if (https_init() != 0)
+    {
+        fprintf(stderr, "Cannot initialize libcurl.\n");
+        string_list_free(&domains);
+        return 1;
+    }
+
     /* Open the output before the lookups so a bad path fails immediately. */
     FILE *out = stdout;
 
@@ -268,6 +276,7 @@ int main(int argc, char *argv[])
 
     free(reports);
     string_list_free(&domains);
+    https_cleanup();
 
     return status;
 }

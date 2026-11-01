@@ -281,3 +281,89 @@ void test_signals(void)
     CHECK_INT(report.findings[report.finding_count - 1].level, SEVERITY_INFO);
     domain_report_free(&report);
 }
+
+static void set_certificate(domain_report *report, double days_left, int trusted)
+{
+    time_t until = time(NULL) + (time_t)(days_left * 86400);
+    struct tm parts;
+
+    report->tls.status = LOOKUP_OK;
+    report->tls.trusted = trusted;
+    snprintf(report->tls.trust_error, sizeof(report->tls.trust_error), "%s", trusted ? "" : "self-signed certificate");
+    gmtime_r(&until, &parts);
+    strftime(report->tls.valid_until, sizeof(report->tls.valid_until), "%b %d %H:%M:%S %Y GMT", &parts);
+}
+
+void test_source_signals(void)
+{
+    domain_report report;
+
+    make_report(&report, "certok.example", 3650);
+    set_certificate(&report, 80.5, 1);
+    analyze_domain(&report);
+    CHECK_INT(report.finding_count, 0);
+    domain_report_free(&report);
+
+    make_report(&report, "certsoon.example", 3650);
+    set_certificate(&report, 5.5, 1);
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_LOW, "TLS certificate expires in 5 days"));
+    domain_report_free(&report);
+
+    make_report(&report, "certexpired.example", 3650);
+    set_certificate(&report, -3.5, 0);
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_MEDIUM, "expired 3 days ago"));
+    CHECK(!has_finding(&report, SEVERITY_MEDIUM, "not trusted"));
+    domain_report_free(&report);
+
+    make_report(&report, "selfsigned.example", 3650);
+    set_certificate(&report, 200.5, 0);
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_MEDIUM, "not trusted (self-signed certificate)"));
+    domain_report_free(&report);
+
+    /* DNSSEC: unsigned is informational; DS without DNSKEY is broken. */
+    make_report(&report, "unsigned.example", 3650);
+    report.dns.ds.status = LOOKUP_OK;
+    report.dns.dnskey.status = LOOKUP_OK;
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_INFO, "Not signed with DNSSEC"));
+    domain_report_free(&report);
+
+    make_report(&report, "brokendnssec.example", 3650);
+    report.dns.ds.status = LOOKUP_OK;
+    report.dns.dnskey.status = LOOKUP_OK;
+    string_list_add(&report.dns.ds.values, "key tag 1, algorithm 13, digest type 2");
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_MEDIUM, "DNSSEC is broken"));
+    domain_report_free(&report);
+
+    make_report(&report, "signed.example", 3650);
+    report.dns.ds.status = LOOKUP_OK;
+    report.dns.dnskey.status = LOOKUP_OK;
+    string_list_add(&report.dns.ds.values, "key tag 1, algorithm 13, digest type 2");
+    string_list_add(&report.dns.dnskey.values, "flags 257 (key-signing), algorithm 13");
+    analyze_domain(&report);
+    CHECK_INT(report.finding_count, 0);
+    domain_report_free(&report);
+
+    /* Registry status codes, in RDAP and EPP spelling. */
+    make_report(&report, "held.example", 3650);
+    string_list_add(&report.whois.statuses, "client hold");
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_MEDIUM, "withdrawn from DNS"));
+    domain_report_free(&report);
+
+    make_report(&report, "deleting.example", 3650);
+    string_list_add(&report.whois.statuses, "pendingDelete");
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_MEDIUM, "being deleted"));
+    domain_report_free(&report);
+
+    make_report(&report, "locked.example", 3650);
+    string_list_add(&report.whois.statuses, "clientTransferProhibited");
+    analyze_domain(&report);
+    CHECK_INT(report.finding_count, 0);
+    domain_report_free(&report);
+}

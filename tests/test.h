@@ -61,5 +61,8 @@ void test_asn_parse(void);
 void test_dns_helpers(void);
 void test_correlate(void);
 void test_dns_packet(void);
+void test_json(void);
+void test_sources(void);
+void test_source_signals(void);
 
 #endif

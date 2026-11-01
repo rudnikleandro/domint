@@ -6,7 +6,9 @@
 #include "domain.h"
 #include "model.h"
 #include "http.h"
+#include "rdap.h"
 #include "resolve.h"
+#include "tls.h"
 #include "whois.h"
 
 void collect_domain(domain_report *report, int passive, const struct in_addr *custom_resolver)
@@ -28,14 +30,22 @@ void collect_domain(domain_report *report, int passive, const struct in_addr *cu
     {
         record_observation(observations, HTTP_COLLECTOR, "target", report->name, OBS_NOT_QUERIED,
                            "--passive: the target is not contacted", NULL, 0);
+        record_observation(observations, TLS_COLLECTOR, "target", report->name, OBS_NOT_QUERIED,
+                           "--passive: the target is not contacted", NULL, 0);
     }
     else
     {
         http_collect(report->name, report->addresses, report->address_count, observations);
+        tls_collect(report->name, report->addresses, report->address_count, observations);
     }
 
     dns_collect(report->name, report->org_domain, custom_resolver, observations);
-    whois_collect(report->org_domain, observations);
+
+    /* RDAP gives structured data; WHOIS covers registries without it. */
+    if (!rdap_collect(report->org_domain, observations))
+    {
+        whois_collect(report->org_domain, observations);
+    }
 }
 
 void interpret_domain(domain_report *report)
@@ -52,7 +62,13 @@ void interpret_domain(domain_report *report)
     }
 
     http_interpret(observations, &report->http);
+    tls_interpret(observations, &report->tls);
     dns_interpret(report->name, report->org_domain, observations, &report->dns);
-    whois_interpret(report->org_domain, observations, &report->whois);
+
+    if (rdap_interpret(report->org_domain, observations, &report->whois) != 0)
+    {
+        whois_interpret(report->org_domain, observations, &report->whois);
+    }
+
     analyze_domain(report);
 }

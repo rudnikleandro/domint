@@ -54,6 +54,9 @@ int main(void)
         {"dns_helpers", test_dns_helpers},
         {"correlate", test_correlate},
         {"dns_packet", test_dns_packet},
+        {"json", test_json},
+        {"sources", test_sources},
+        {"source_signals", test_source_signals},
     };
 
     for (size_t i = 0; i < sizeof(suites) / sizeof(suites[0]); i++)

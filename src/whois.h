@@ -31,4 +31,7 @@ void whois_interpret(const char *domain, const observation_list *observations, w
  * Network-free, so it can be tested against saved responses. */
 void whois_parse(const char *response, whois_info *info);
 
+/* True when a registrant value is a privacy service or a redaction. */
+int looks_redacted(const char *registrant);
+
 #endif

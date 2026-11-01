@@ -18,6 +18,7 @@ static void parse_fixture(const char *name, whois_info *info)
 {
     char *response = read_fixture(name);
 
+    string_list_free(&info->statuses);
     memset(info, 0, sizeof(*info));
     CHECK(response != NULL);
 
@@ -30,7 +31,7 @@ static void parse_fixture(const char *name, whois_info *info)
 
 void test_whois_parse(void)
 {
-    whois_info info;
+    whois_info info = {0};
 
     parse_fixture("whois_verisign_registered.txt", &info);
     CHECK_INT(info.registered, 1);
@@ -64,9 +65,11 @@ void test_whois_parse(void)
     CHECK_STR(info.expires, "20340424");
     CHECK_INT(info.privacy, 0);
 
+    string_list_free(&info.statuses);
     memset(&info, 0, sizeof(info));
     whois_parse("Registrant Organization: Privacy service provided by Withheld for Privacy ehf\n", &info);
     CHECK_INT(info.privacy, 1);
+    string_list_free(&info.statuses);
 }
 
 void test_asn_parse(void)

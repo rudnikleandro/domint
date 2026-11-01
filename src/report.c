@@ -9,6 +9,7 @@
 #include "dns.h"
 #include "model.h"
 #include "http.h"
+#include "tls.h"
 #include "util.h"
 
 #define RULE "================================================================================"
@@ -19,6 +20,8 @@
 #define REPORT_WIDTH 80
 #define TAG_WIDTH 9
 #define SOURCE_INDENT 15
+
+static void describe_certificate(const tls_info *tls, char *out, size_t size);
 
 static const char *severity_tag(severity level)
 {
@@ -314,6 +317,13 @@ static void print_summary(FILE *out, const domain_report *report)
     print_field(out, "DNS provider", report->dns_provider[0] != '\0' ? report->dns_provider : "unknown");
     print_field(out, "Mail", report->mail_provider[0] != '\0' ? report->mail_provider : "no MX records");
 
+    if (report->tls.status == LOOKUP_OK)
+    {
+        char certificate[FIELD_SIZE * 2];
+        describe_certificate(&report->tls, certificate, sizeof(certificate));
+        print_field(out, "Certificate", certificate);
+    }
+
     if (report->services.count > 0)
     {
         print_wrapped(out, 2, LABEL_WIDTH, "Services", (const char *const *)report->services.items, report->services.count);
@@ -373,6 +383,97 @@ static void print_addresses(FILE *out, const domain_report *report)
     }
 }
 
+/* "O=Let's Encrypt, CN=YR1" -> "Let's Encrypt"; the whole issuer otherwise. */
+static void issuer_name(const char *issuer, char *out, size_t size)
+{
+    const char *organization = strstr(issuer, "O = ");
+    size_t skip = 4;
+
+    if (organization == NULL)
+    {
+        organization = strstr(issuer, "O=");
+        skip = 2;
+    }
+
+    if (organization != NULL && (organization == issuer || organization[-1] == ' ' || organization[-1] == ','))
+    {
+        snprintf(out, size, "%.*s", (int)strcspn(organization + skip, ",/"), organization + skip);
+        return;
+    }
+
+    snprintf(out, size, "%s", issuer);
+}
+
+static void describe_certificate(const tls_info *tls, char *out, size_t size)
+{
+    char issuer[FIELD_SIZE * 2];
+    time_t until;
+
+    issuer_name(tls->issuer, issuer, sizeof(issuer));
+
+    if (tls_parse_time(tls->valid_until, &until) == 0)
+    {
+        char date[16];
+        long days = (long)((until - time(NULL)) / 86400);
+        struct tm parts;
+
+        gmtime_r(&until, &parts);
+        strftime(date, sizeof(date), "%Y-%m-%d", &parts);
+        snprintf(out, size, "%.200s, %s %s (%ld day%s)%s", issuer, days < 0 ? "expired" : "expires", date, days < 0 ? -days : days,
+                 (days == 1 || days == -1) ? "" : "s", tls->trusted ? "" : ", not trusted");
+    }
+    else
+    {
+        snprintf(out, size, "%.200s%s", issuer, tls->trusted ? "" : ", not trusted");
+    }
+}
+
+static void print_tls(FILE *out, const domain_report *report)
+{
+    const tls_info *tls = &report->tls;
+
+    print_section(out, "TLS CERTIFICATE");
+
+    if (tls->not_queried)
+    {
+        fprintf(out, "  Not contacted (--passive).\n");
+        return;
+    }
+
+    if (tls->status == LOOKUP_SKIPPED)
+    {
+        fprintf(out, "  Skipped: no address to connect to.\n");
+        return;
+    }
+
+    if (tls->status != LOOKUP_OK)
+    {
+        fprintf(out, "  No certificate from %s: %s.\n", tls->endpoint, tls->trust_error);
+        return;
+    }
+
+    char text[FIELD_SIZE * 2];
+
+    print_field(out, "Endpoint", tls->endpoint);
+    print_field(out, "Subject", tls->subject[0] != '\0' ? tls->subject : "unknown");
+    print_field(out, "Issuer", tls->issuer[0] != '\0' ? tls->issuer : "unknown");
+    snprintf(text, sizeof(text), "%s -> %s", tls->valid_from[0] != '\0' ? tls->valid_from : "?",
+             tls->valid_until[0] != '\0' ? tls->valid_until : "?");
+    print_field(out, "Valid", text);
+    snprintf(text, sizeof(text), "%s%.400s", tls->trusted ? "yes" : "no: ", tls->trusted ? "" : tls->trust_error);
+    print_field(out, "Trusted", text);
+
+    if (tls->signature[0] != '\0')
+    {
+        print_field(out, "Signature", tls->signature);
+    }
+
+    if (tls->serial[0] != '\0')
+    {
+        print_field(out, "Serial", tls->serial);
+    }
+}
+
 static void print_http(FILE *out, const domain_report *report)
 {
     const http_info *http = &report->http;
@@ -397,6 +498,35 @@ static void print_http(FILE *out, const domain_report *report)
         print_field(out, "Status", http->status_line[0] != '\0' ? http->status_line : "unavailable");
         print_field(out, "Location", http->location[0] != '\0' ? http->location : "none");
         print_field(out, "Server", http->server[0] != '\0' ? http->server : "not disclosed");
+    }
+}
+
+static void print_dnssec(FILE *out, const dns_info *dns)
+{
+    char text[FIELD_SIZE * 2];
+
+    if (dns->ds.status == LOOKUP_SKIPPED)
+    {
+        return;
+    }
+
+    if (dns->ds.status != LOOKUP_OK || dns->dnskey.status != LOOKUP_OK)
+    {
+        print_field(out, "DNSSEC", "lookup failed");
+    }
+    else if (dns->ds.values.count == 0)
+    {
+        print_field(out, "DNSSEC", dns->dnskey.values.count > 0 ? "not signed at the parent (DNSKEY present, no DS)"
+                                                                 : "not signed");
+    }
+    else if (dns->dnskey.values.count == 0)
+    {
+        print_field(out, "DNSSEC", "broken: DS at the parent, but no DNSKEY in the zone");
+    }
+    else
+    {
+        snprintf(text, sizeof(text), "signed (%zu DS, %zu DNSKEY)", dns->ds.values.count, dns->dnskey.values.count);
+        print_field(out, "DNSSEC", text);
     }
 }
 
@@ -467,6 +597,7 @@ static void print_dns(FILE *out, const domain_report *report)
     }
 
     print_record_set(out, "CAA", &dns->caa);
+    print_dnssec(out, dns);
 
     if (dns->soa_status == LOOKUP_FAILED)
     {
@@ -519,7 +650,10 @@ static void print_whois(FILE *out, const domain_report *report)
 {
     const whois_info *whois = &report->whois;
 
-    print_section(out, "WHOIS");
+    char title[32];
+
+    snprintf(title, sizeof(title), "REGISTRATION (%s)", whois->protocol[0] != '\0' ? whois->protocol : "WHOIS");
+    print_section(out, title);
 
     if (strcmp(whois->queried, report->name) != 0)
     {
@@ -546,6 +680,16 @@ static void print_whois(FILE *out, const domain_report *report)
     print_whois_date(out, "Expires", whois->expires);
     print_field(out, "Registrant", whois->registrant[0] != '\0' ? whois->registrant : "not in the registry record");
 
+    if (whois->abuse_email[0] != '\0')
+    {
+        print_field(out, "Abuse", whois->abuse_email);
+    }
+
+    if (whois->statuses.count > 0)
+    {
+        print_wrapped(out, 2, LABEL_WIDTH, "Status", (const char *const *)whois->statuses.items, whois->statuses.count);
+    }
+
     if (whois->registrant_country[0] != '\0')
     {
         print_field(out, "Country", whois->registrant_country);
@@ -564,7 +708,8 @@ static void print_sources(FILE *out, const domain_report *report)
     for (size_t i = 0; i < report->observations.count; i++)
     {
         const observation *item = &report->observations.items[i];
-        int reached_target = strcmp(item->collector, HTTP_COLLECTOR) == 0 && item->status != OBS_NOT_QUERIED;
+        int reached_target = (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0) &&
+                             item->status != OBS_NOT_QUERIED;
 
         snprintf(asked, sizeof(asked), "%s %s", item->collector, item->query);
         snprintf(source, sizeof(source), "%s%s", item->source, reached_target ? " (target, from your IP)" : "");
@@ -581,7 +726,7 @@ static void print_raw(FILE *out, const domain_report *report)
 {
     if (report->whois.raw != NULL)
     {
-        fprintf(out, "\nRAW WHOIS RESPONSE (%s)\n\n%s\n", report->whois.server, report->whois.raw);
+        fprintf(out, "\nRAW %s RESPONSE (%s)\n\n%s\n", report->whois.protocol, report->whois.server, report->whois.raw);
     }
 
     if (report->http.raw != NULL)
@@ -604,6 +749,7 @@ static void print_domain(FILE *out, const domain_report *report, const report_op
 
     print_addresses(out, report);
     print_http(out, report);
+    print_tls(out, report);
     print_dns(out, report);
     print_whois(out, report);
     print_sources(out, report);

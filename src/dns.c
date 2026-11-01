@@ -15,6 +15,9 @@
 
 /* Not every resolver header defines ns_t_caa. */
 #define DNS_TYPE_CAA 257
+#define DNS_TYPE_DS 43
+#define DNS_TYPE_DNSKEY 48
+#define DNSKEY_FLAG_SEP 0x0001
 #define CAA_FLAG_CRITICAL 0x80
 #define TXT_VALUE_SIZE 2048
 
@@ -124,6 +127,36 @@ static int format_caa(ns_rr rr, char *out, size_t size)
     value[value_len] = '\0';
 
     snprintf(out, size, "%s \"%s\"%s", tag, value, (rdata[0] & CAA_FLAG_CRITICAL) != 0 ? " (critical)" : "");
+    return 0;
+}
+
+/* DS: key tag (2 bytes), algorithm, digest type, digest. */
+static int format_ds(ns_rr rr, char *out, size_t size)
+{
+    const unsigned char *rdata = ns_rr_rdata(rr);
+
+    if (ns_rr_rdlen(rr) < 4)
+    {
+        return -1;
+    }
+
+    snprintf(out, size, "key tag %u, algorithm %u, digest type %u", ns_get16(rdata), rdata[2], rdata[3]);
+    return 0;
+}
+
+/* DNSKEY: flags (2 bytes), protocol, algorithm, key. */
+static int format_dnskey(ns_rr rr, char *out, size_t size)
+{
+    const unsigned char *rdata = ns_rr_rdata(rr);
+
+    if (ns_rr_rdlen(rr) < 4)
+    {
+        return -1;
+    }
+
+    unsigned flags = ns_get16(rdata);
+    snprintf(out, size, "flags %u (%s), algorithm %u", flags, (flags & DNSKEY_FLAG_SEP) != 0 ? "key-signing" : "zone-signing",
+             rdata[3]);
     return 0;
 }
 
@@ -354,6 +387,12 @@ int dns_parse_answer(const unsigned char *packet, size_t length, int type, strin
         case DNS_TYPE_CAA:
             formatted = format_caa(rr, value, sizeof(value));
             break;
+        case DNS_TYPE_DS:
+            formatted = format_ds(rr, value, sizeof(value));
+            break;
+        case DNS_TYPE_DNSKEY:
+            formatted = format_dnskey(rr, value, sizeof(value));
+            break;
         case ns_t_soa:
             if (info != NULL && read_soa(handle, rr, info) == 0)
             {
@@ -392,6 +431,10 @@ static const char *type_name(int type)
         return "SOA";
     case DNS_TYPE_CAA:
         return "CAA";
+    case DNS_TYPE_DS:
+        return "DS";
+    case DNS_TYPE_DNSKEY:
+        return "DNSKEY";
     default:
         return "?";
     }
@@ -529,6 +572,11 @@ void dns_collect(const char *domain, const char *org_domain, const struct in_add
         collect_records(&resolver, domain, types[i], observations, NULL);
     }
 
+    /* DNSSEC is decided per zone: the DS set comes from the parent (the
+     * registry), the DNSKEY set from the zone itself. */
+    collect_records(&resolver, org_domain, DNS_TYPE_DS, observations, NULL);
+    collect_records(&resolver, org_domain, DNS_TYPE_DNSKEY, observations, NULL);
+
     /* DMARC lives at _dmarc.<name>; receivers fall back to the organizational
      * domain when a subdomain publishes none. */
     const char *candidates[2] = {domain, org_domain};
@@ -605,6 +653,8 @@ void dns_interpret(const char *domain, const char *org_domain, const observation
     info->txt.status = interpret_records(observations, domain, ns_t_txt, &info->txt.values, info);
     info->soa_status = interpret_records(observations, domain, ns_t_soa, NULL, info);
     info->caa.status = interpret_records(observations, domain, DNS_TYPE_CAA, &info->caa.values, info);
+    info->ds.status = interpret_records(observations, org_domain, DNS_TYPE_DS, &info->ds.values, info);
+    info->dnskey.status = interpret_records(observations, org_domain, DNS_TYPE_DNSKEY, &info->dnskey.values, info);
 
     const char *candidates[2] = {domain, org_domain};
     size_t candidate_count = strcmp(domain, org_domain) == 0 ? 1 : 2;
