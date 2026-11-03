@@ -28,6 +28,11 @@ https_response https_get(const char *url, size_t max_size);
  * for sources that send large answers slowly. */
 https_response https_get_timeout(const char *url, size_t max_size, long timeout_seconds);
 
+/* The general form: extra request `headers` (NULL-terminated, may be NULL)
+ * and, when `post_body` is not NULL, a POST of it instead of a GET. */
+https_response https_request(const char *url, size_t max_size, long timeout_seconds, const char *const *headers,
+                             const char *post_body);
+
 /* The host part of an https:// URL, for reporting the source. */
 void url_host(const char *url, char *out, size_t size);
 

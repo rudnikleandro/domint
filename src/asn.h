@@ -3,6 +3,8 @@
 
 #include "model.h"
 
+#define ASN_COLLECTOR "asn"
+
 /* Asks Team Cymru which network announces `ip`, recording the answer. */
 void asn_collect(const char *ip, observation_list *observations);
 

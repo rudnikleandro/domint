@@ -419,8 +419,6 @@ static void analyze_registration(domain_report *report, time_t now)
 {
     const whois_info *whois = &report->whois;
 
-    report->age_days = -1;
-
     if (whois->status != LOOKUP_OK)
     {
         add_finding(report, SEVERITY_INFO, "Registration data unavailable: %s.", whois->note);
@@ -825,13 +823,20 @@ static void analyze_tls(domain_report *report, time_t now)
     }
 }
 
+/* Whether the name is registered, as far as this report knows: without the
+ * WHOIS module the registry was not asked, so it is taken as registered. */
+static int is_registered(const domain_report *report)
+{
+    return !report_has(report, MODULE_WHOIS) || report->whois.registered;
+}
+
 static void analyze_dns(domain_report *report)
 {
     const dns_info *dns = &report->dns;
 
     /* CAA is inherited from parent names, so only judge it at the registrable domain. */
     if (dns->caa.status == LOOKUP_OK && dns->caa.values.count == 0 && strcmp(report->name, report->org_domain) == 0 &&
-        report->whois.registered)
+        is_registered(report))
     {
         add_finding(report, SEVERITY_INFO, "No CAA record: any certificate authority may issue certificates for this domain.");
     }
@@ -859,7 +864,7 @@ static void analyze_dns(domain_report *report)
 
     /* DNSSEC: DS at the parent with no DNSKEY in the zone breaks resolution
      * for validating resolvers; no DS at all just means unsigned. */
-    if (dns->ds.status == LOOKUP_OK && dns->dnskey.status == LOOKUP_OK && report->whois.registered)
+    if (dns->ds.status == LOOKUP_OK && dns->dnskey.status == LOOKUP_OK && is_registered(report))
     {
         if (dns->ds.values.count > 0 && dns->dnskey.values.count == 0)
         {
@@ -957,7 +962,7 @@ static void analyze_non_production(domain_report *report)
 
         probed |= sub->probed;
 
-        if ((sub->probed && !sub->is_live) || !is_non_production(sub->name, report->name))
+        if ((sub->probed && (!sub->is_live || sub->edge_only)) || !is_non_production(sub->name, report->name))
         {
             continue;
         }
@@ -1005,6 +1010,164 @@ static void analyze_non_production(domain_report *report)
     }
 }
 
+/* A CDN that answers 400, 409 or 421 for a name is refusing a host it has
+ * no site for: the DNS record still points at the CDN, nothing is served. */
+static int is_edge_only(const subdomain_info *sub)
+{
+    return sub->probed && sub->is_live &&
+           (sub->http_code == 400 || sub->http_code == 409 || sub->http_code == 421) &&
+           proxy_provider_name(sub->as_name) != NULL;
+}
+
+/* Hosting services where a name pointing at a deleted resource can be
+ * claimed by anyone who creates a resource with that name. */
+static int is_claimable(const char *target)
+{
+    static const char *const suffixes[] = {
+        ".azurewebsites.net", ".cloudapp.net",      ".cloudapp.azure.com", ".trafficmanager.net",
+        ".blob.core.windows.net", ".azureedge.net", ".azurefd.net",        ".herokuapp.com",
+        ".herokudns.com",     ".github.io",         ".s3.amazonaws.com",   ".elasticbeanstalk.com",
+        ".cloudfront.net",    ".netlify.app",       ".pantheonsite.io",    ".myshopify.com",
+        ".zendesk.com",       ".ghost.io",          ".surge.sh",           ".bitbucket.io",
+        ".readthedocs.io",    ".statuspage.io",     ".helpscoutdocs.com",  ".wordpress.com",
+        ".fly.dev",           ".vercel.app",        ".firebaseapp.com",    ".web.app",
+    };
+    size_t length = strlen(target);
+
+    for (size_t i = 0; i < COUNT(suffixes); i++)
+    {
+        size_t suffix_length = strlen(suffixes[i]);
+
+        if (length > suffix_length && strcasecmp(target + length - suffix_length, suffixes[i]) == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* Short names ("www", "dev.api") of the subdomains `match` picks, joined
+ * with ", " and cut with "..." when they do not fit. With `arrows`, each
+ * is followed by " -> <alias target>". Returns how many matched. */
+static size_t join_subdomains(const domain_report *report, int (*match)(const subdomain_info *), int arrows,
+                              char *out, size_t size)
+{
+    size_t count = 0;
+    size_t length = 0;
+    int cut = 0;
+
+    out[0] = '\0';
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+        char prefix[DOMAIN_SIZE];
+        char entry[DOMAIN_SIZE * 2 + 8];
+
+        if (!match(sub))
+        {
+            continue;
+        }
+
+        count++;
+
+        if (cut)
+        {
+            continue;
+        }
+
+        if (!subdomain_prefix(sub->name, report->name, prefix, sizeof(prefix)))
+        {
+            snprintf(prefix, sizeof(prefix), "%s", sub->name);
+        }
+
+        /* A long generated target (a tenant id) would swamp the sentence;
+         * the SUBDOMAINS section has it in full. */
+        char target[64] = "";
+
+        if (arrows)
+        {
+            snprintf(target, sizeof(target), strlen(sub->cname) > 48 ? " -> %.45s..." : " -> %s", sub->cname);
+        }
+
+        snprintf(entry, sizeof(entry), "%s%s%s", count > 1 ? ", " : "", prefix, target);
+
+        if (length + strlen(entry) + 5 < size)
+        {
+            memcpy(out + length, entry, strlen(entry) + 1);
+            length += strlen(entry);
+        }
+        else
+        {
+            snprintf(out + length, size - length, ", ...");
+            cut = 1;
+        }
+    }
+
+    return count;
+}
+
+static int is_edge(const subdomain_info *sub)
+{
+    return sub->edge_only;
+}
+
+static int is_claimable_dangling(const subdomain_info *sub)
+{
+    return sub->cname_dangling && is_claimable(sub->cname);
+}
+
+static int is_other_dangling(const subdomain_info *sub)
+{
+    return sub->cname_dangling && !is_claimable(sub->cname);
+}
+
+/* DNS records left behind: names whose alias target is gone, and names a
+ * CDN still answers for without serving anything. */
+static void analyze_stale_records(domain_report *report)
+{
+    char names[400];
+    size_t count = join_subdomains(report, is_claimable_dangling, 1, names, sizeof(names));
+
+    if (count > 0)
+    {
+        add_finding(report, SEVERITY_HIGH,
+                    "Subdomain takeover risk: %zu alias%s point%s to a deleted resource on a service where anyone can "
+                    "claim the name: %s.",
+                    count, count == 1 ? "" : "es", count == 1 ? "s" : "", names);
+    }
+
+    count = join_subdomains(report, is_other_dangling, 1, names, sizeof(names));
+
+    if (count > 0)
+    {
+        add_finding(report, SEVERITY_MEDIUM, "%zu dangling alias%s: the CNAME target no longer exists: %s.", count,
+                    count == 1 ? "" : "es", names);
+    }
+
+    count = join_subdomains(report, is_edge, 0, names, sizeof(names));
+
+    if (count > 0)
+    {
+        const char *provider = NULL;
+
+        for (size_t i = 0; i < report->subdomains.count && provider == NULL; i++)
+        {
+            if (report->subdomains.items[i].edge_only)
+            {
+                provider = proxy_provider_name(report->subdomains.items[i].as_name);
+            }
+        }
+
+        add_finding(report, SEVERITY_LOW,
+                    "%zu subdomain%s still point%s to %s, which serves no site for %s: stale DNS records worth "
+                    "removing: %s.",
+                    count, count == 1 ? "" : "s", count == 1 ? "s" : "", provider != NULL ? provider : "a CDN",
+                    count == 1 ? "it" : "them", names);
+    }
+}
+
 static void analyze_subdomains(domain_report *report)
 {
     if (report->subdomains.count == 0)
@@ -1012,53 +1175,17 @@ static void analyze_subdomains(domain_report *report)
         return;
     }
 
-    size_t live_count = 0;
-    size_t accessible_count = 0;
-    size_t restricted_count = 0;
-    size_t redirect_count = 0;
     int any_probed = 0;
 
     for (size_t i = 0; i < report->subdomains.count; i++)
     {
-        const subdomain_info *sub = &report->subdomains.items[i];
+        subdomain_info *sub = &report->subdomains.items[i];
 
-        if (sub->probed)
-        {
-            any_probed = 1;
-
-            if (sub->is_live)
-            {
-                live_count++;
-
-                if (sub->http_code == 200)
-                {
-                    accessible_count++;
-                }
-                else if (sub->http_code == 401 || sub->http_code == 403)
-                {
-                    restricted_count++;
-                }
-                else if (sub->http_code >= 300 && sub->http_code < 400)
-                {
-                    redirect_count++;
-                }
-            }
-        }
+        any_probed |= sub->probed;
+        sub->edge_only = is_edge_only(sub);
     }
 
-    if (any_probed)
-    {
-        add_finding(report, SEVERITY_INFO,
-                    "Subdomain liveness check: %zu of %zu subdomain%s online (%zu accessible, %zu restricted, %zu redirect%s).",
-                    live_count, report->subdomains.count, report->subdomains.count == 1 ? "" : "s",
-                    accessible_count, restricted_count, redirect_count, redirect_count == 1 ? "" : "s");
-    }
-    else
-    {
-        add_finding(report, SEVERITY_INFO,
-                    "Passive OSINT enumeration discovered %zu subdomain%s in Certificate Transparency and passive DNS logs.",
-                    report->subdomains.count, report->subdomains.count == 1 ? "" : "s");
-    }
+    analyze_stale_records(report);
 
     static const char *const sensitive_keywords[] = {
         "vpn", "admin", "internal",
@@ -1092,7 +1219,7 @@ static void analyze_subdomains(domain_report *report)
         {
             if (strstr(prefix, sensitive_keywords[k]) != NULL)
             {
-                if (sub->probed && sub->is_live)
+                if (sub->probed && sub->is_live && !sub->edge_only)
                 {
                     if (sub->http_code == 200)
                     {
@@ -1173,6 +1300,153 @@ static void analyze_subdomains(domain_report *report)
     analyze_non_production(report);
 }
 
+/* Other registrable domains on the certificate share an owner or a
+ * hosting account with this one: a pivot to related infrastructure. */
+static void analyze_certificate_names(domain_report *report)
+{
+    string_list others = {0};
+
+    for (size_t i = 0; i < report->tls.names.count; i++)
+    {
+        const char *name = report->tls.names.items[i];
+        char org[DOMAIN_SIZE];
+
+        organizational_domain(name[0] == '*' && name[1] == '.' ? name + 2 : name, org, sizeof(org));
+
+        if (strcasecmp(org, report->org_domain) != 0)
+        {
+            string_list_add_unique(&others, org);
+        }
+    }
+
+    if (others.count > 0)
+    {
+        char list[400] = "";
+
+        for (size_t i = 0; i < others.count; i++)
+        {
+            if (strlen(list) + strlen(others.items[i]) + 6 >= sizeof(list))
+            {
+                strncat(list, ", ...", sizeof(list) - strlen(list) - 1);
+                break;
+            }
+
+            if (i > 0)
+            {
+                strncat(list, ", ", sizeof(list) - strlen(list) - 1);
+            }
+
+            strncat(list, others.items[i], sizeof(list) - strlen(list) - 1);
+        }
+
+        add_finding(report, SEVERITY_INFO, "The TLS certificate also covers %zu other domain%s, a lead to related "
+                    "infrastructure: %s.", others.count, others.count == 1 ? "" : "s", list);
+    }
+
+    string_list_free(&others);
+}
+
+/* A domain whose first certificate is days old is newly deployed, which
+ * matters for a name that looks established. */
+static void analyze_ct(domain_report *report, time_t now)
+{
+    time_t first;
+
+    if (report->ct_first_seen[0] == '\0' || parse_whois_date(report->ct_first_seen, &first) != 0)
+    {
+        return;
+    }
+
+    long days = (long)((now - first) / SECONDS_PER_DAY);
+
+    if (days >= 0 && days <= NEW_DOMAIN_DAYS)
+    {
+        add_finding(report, SEVERITY_MEDIUM,
+                    "The first certificate for this domain was logged %ld day%s ago (%s): newly deployed "
+                    "infrastructure.",
+                    days, days == 1 ? "" : "s", report->ct_first_seen);
+    }
+}
+
+static void join_list(const string_list *list, char *out, size_t size)
+{
+    out[0] = '\0';
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        if (i > 0)
+        {
+            strncat(out, ", ", size - strlen(out) - 1);
+        }
+
+        strncat(out, list->items[i], size - strlen(out) - 1);
+    }
+}
+
+/* Pulse titles quoted one by one: "a", "b". */
+static void join_pulses(const string_list *list, char *out, size_t size)
+{
+    out[0] = '\0';
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        if (i > 0)
+        {
+            strncat(out, "\", \"", size - strlen(out) - 1);
+        }
+
+        strncat(out, list->items[i], size - strlen(out) - 1);
+    }
+}
+
+static int is_listed(const char *verdict)
+{
+    return verdict[0] != '\0' && strcasecmp(verdict, "not listed") != 0;
+}
+
+static void analyze_reputation(domain_report *report)
+{
+    const reputation_info *rep = &report->reputation;
+    char names[256];
+
+    if (rep->threatfox_status == LOOKUP_OK && rep->threatfox_iocs > 0)
+    {
+        join_list(&rep->threatfox_malware, names, sizeof(names));
+        add_finding(report, SEVERITY_HIGH, "ThreatFox lists this domain as an indicator of compromise (%ld entr%s%s%s).",
+                    rep->threatfox_iocs, rep->threatfox_iocs == 1 ? "y" : "ies", names[0] != '\0' ? ": " : "", names);
+    }
+
+    if (rep->urlhaus_status == LOOKUP_OK && rep->urlhaus_urls > 0)
+    {
+        join_list(&rep->urlhaus_threats, names, sizeof(names));
+        add_finding(report, rep->urlhaus_online > 0 ? SEVERITY_HIGH : SEVERITY_MEDIUM,
+                    "URLhaus has %ld malware URL%s on this host, %ld still online%s%s.", rep->urlhaus_urls,
+                    rep->urlhaus_urls == 1 ? "" : "s", rep->urlhaus_online, names[0] != '\0' ? "; threat: " : "",
+                    names);
+    }
+
+    if (rep->urlhaus_status == LOOKUP_OK && is_listed(rep->spamhaus_dbl))
+    {
+        add_finding(report, SEVERITY_HIGH, "Listed on the Spamhaus DBL (%s).", rep->spamhaus_dbl);
+    }
+
+    if (rep->urlhaus_status == LOOKUP_OK && is_listed(rep->surbl))
+    {
+        add_finding(report, SEVERITY_MEDIUM, "Listed on SURBL (%s).", rep->surbl);
+    }
+
+    /* Pulses also collect benign infrastructure that malware talks to, so
+     * they are a lead to read, not a verdict; for a domain OTX itself marks
+     * as known-good they are noise. */
+    if (rep->otx_status == LOOKUP_OK && rep->otx_pulses > 0 && !rep->otx_allowlisted)
+    {
+        join_pulses(&rep->otx_pulse_names, names, sizeof(names));
+        add_finding(report, SEVERITY_LOW, "Referenced in %ld AlienVault OTX pulse%s%s%s%s.", rep->otx_pulses,
+                    rep->otx_pulses == 1 ? "" : "s", names[0] != '\0' ? " (e.g. \"" : "", names,
+                    names[0] != '\0' ? "\")" : "");
+    }
+}
+
 /* Most severe first. Insertion sort because it is stable: signals of equal
  * severity keep the order they were found in, so reports are reproducible. */
 static void sort_findings(domain_report *report)
@@ -1196,13 +1470,52 @@ void analyze_domain(domain_report *report)
 {
     time_t now = time(NULL);
 
+    report->age_days = -1;
     summarize(report);
-    analyze_registration(report, now);
-    analyze_addresses(report);
-    analyze_email(report);
-    analyze_web(report);
-    analyze_tls(report, now);
-    analyze_dns(report);
-    analyze_subdomains(report);
+
+    /* Only the modules that ran: a lookup that was not made must not read
+     * as "no records". */
+    if (report_has(report, MODULE_WHOIS))
+    {
+        analyze_registration(report, now);
+    }
+
+    if (report_has(report, MODULE_ADDRESSES))
+    {
+        analyze_addresses(report);
+    }
+
+    if (report_has(report, MODULE_DNS))
+    {
+        analyze_email(report);
+    }
+
+    if (report_has(report, MODULE_HTTP))
+    {
+        analyze_web(report);
+    }
+
+    if (report_has(report, MODULE_TLS))
+    {
+        analyze_tls(report, now);
+        analyze_certificate_names(report);
+    }
+
+    if (report_has(report, MODULE_REPUTATION))
+    {
+        analyze_reputation(report);
+    }
+
+    if (report_has(report, MODULE_DNS))
+    {
+        analyze_dns(report);
+    }
+
+    if (report_has(report, MODULE_SUBDOMAINS))
+    {
+        analyze_subdomains(report);
+        analyze_ct(report, now);
+    }
+
     sort_findings(report);
 }

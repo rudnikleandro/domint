@@ -21,6 +21,7 @@ static size_t domain_index;
 static size_t domain_total;
 static char domain_name[DOMAIN_SIZE];
 static size_t step;
+static size_t steps_total;
 static char label[FIELD_SIZE];
 static struct timespec started;
 
@@ -51,7 +52,7 @@ static void draw(unsigned frame)
     static const char spinner[] = "|/-\\";
     char bar[BAR_WIDTH + 1];
     char line[512];
-    size_t filled = step * BAR_WIDTH / PROGRESS_STEPS;
+    size_t filled = steps_total > 0 ? step * BAR_WIDTH / steps_total : 0;
 
     for (size_t i = 0; i < BAR_WIDTH; i++)
     {
@@ -96,8 +97,9 @@ static void *tick(void *unused)
     }
 }
 
-void progress_begin(size_t index, size_t total, const char *name)
+void progress_begin(size_t index, size_t total, const char *name, size_t steps)
 {
+    steps_total = steps;
     clock_gettime(CLOCK_MONOTONIC, &started);
     domain_index = index;
     domain_total = total;
@@ -113,7 +115,7 @@ void progress_step(const char *text)
 {
     pthread_mutex_lock(&lock);
 
-    if (step < PROGRESS_STEPS)
+    if (step < steps_total)
     {
         step++;
     }

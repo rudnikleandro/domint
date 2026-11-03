@@ -235,6 +235,10 @@ void domain_report_free(domain_report *report)
     string_list_free(&report->dns.ds.values);
     string_list_free(&report->dns.dnskey.values);
     string_list_free(&report->whois.statuses);
+    string_list_free(&report->tls.names);
+    string_list_free(&report->reputation.otx_pulse_names);
+    string_list_free(&report->reputation.urlhaus_threats);
+    string_list_free(&report->reputation.threatfox_malware);
     string_list_free(&report->services);
     subdomain_list_free(&report->subdomains);
 }

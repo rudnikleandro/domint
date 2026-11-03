@@ -376,6 +376,7 @@ int dns_parse_answer(const unsigned char *packet, size_t length, int type, strin
         switch (type)
         {
         case ns_t_ns:
+        case ns_t_cname:
             formatted = expand_name(handle, ns_rr_rdata(rr), value, sizeof(value));
             break;
         case ns_t_mx:
@@ -423,6 +424,10 @@ static const char *type_name(int type)
     {
     case ns_t_ns:
         return "NS";
+    case ns_t_cname:
+        return "CNAME";
+    case ns_t_a:
+        return "A";
     case ns_t_mx:
         return "MX";
     case ns_t_txt:
@@ -536,29 +541,53 @@ static void describe_resolvers(const struct __res_state *resolver, int custom, c
     }
 }
 
-void dns_collect(const char *domain, const char *org_domain, const struct in_addr *custom_resolver,
-                 observation_list *observations)
+/* Reads the system resolver configuration, pointing it at `custom_resolver`
+ * when one is given. It is only used for the nameserver list and to build
+ * query packets. Returns -1 when the configuration cannot be read. */
+static int open_resolver(res_state resolver, const struct in_addr *custom_resolver)
 {
-    /* Only used for the nameserver list and to build query packets. */
-    struct __res_state resolver;
-    char description[FIELD_SIZE];
+    memset(resolver, 0, sizeof(*resolver));
 
-    memset(&resolver, 0, sizeof(resolver));
-
-    if (res_ninit(&resolver) != 0)
+    if (res_ninit(resolver) != 0)
     {
-        record_observation(observations, DNS_CONFIG_COLLECTOR, "system configuration", "nameservers", OBS_ERROR,
-                           "could not read the resolver configuration", NULL, 0);
-        return;
+        return -1;
     }
 
     if (custom_resolver != NULL)
     {
-        memset(&resolver.nsaddr_list[0], 0, sizeof(resolver.nsaddr_list[0]));
-        resolver.nsaddr_list[0].sin_family = AF_INET;
-        resolver.nsaddr_list[0].sin_port = htons(NS_DEFAULTPORT);
-        resolver.nsaddr_list[0].sin_addr = *custom_resolver;
-        resolver.nscount = 1;
+        memset(&resolver->nsaddr_list[0], 0, sizeof(resolver->nsaddr_list[0]));
+        resolver->nsaddr_list[0].sin_family = AF_INET;
+        resolver->nsaddr_list[0].sin_port = htons(NS_DEFAULTPORT);
+        resolver->nsaddr_list[0].sin_addr = *custom_resolver;
+        resolver->nscount = 1;
+    }
+
+    return 0;
+}
+
+/* On macOS res_nclose() only closes sockets and res_ndestroy() frees what
+ * res_ninit() allocated; glibc has no res_ndestroy() and its res_nclose()
+ * frees everything. */
+static void close_resolver(res_state resolver)
+{
+#ifdef __APPLE__
+    res_ndestroy(resolver);
+#else
+    res_nclose(resolver);
+#endif
+}
+
+void dns_collect(const char *domain, const char *org_domain, const struct in_addr *custom_resolver,
+                 observation_list *observations)
+{
+    struct __res_state resolver;
+    char description[FIELD_SIZE];
+
+    if (open_resolver(&resolver, custom_resolver) != 0)
+    {
+        record_observation(observations, DNS_CONFIG_COLLECTOR, "system configuration", "nameservers", OBS_ERROR,
+                           "could not read the resolver configuration", NULL, 0);
+        return;
     }
 
     describe_resolvers(&resolver, custom_resolver != NULL, description, sizeof(description));
@@ -600,14 +629,104 @@ void dns_collect(const char *domain, const char *org_domain, const struct in_add
         }
     }
 
-    /* On macOS res_nclose() only closes sockets and res_ndestroy() frees what
-     * res_ninit() allocated; glibc has no res_ndestroy() and its res_nclose()
-     * frees everything. */
-#ifdef __APPLE__
-    res_ndestroy(&resolver);
-#else
-    res_nclose(&resolver);
-#endif
+    close_resolver(&resolver);
+}
+
+/* Asks for the address of `name` and records the answer under "A <name>".
+ * A CNAME query would return the alias alone; the address query makes the
+ * resolver follow the chain, so a target that is gone comes back as
+ * NXDOMAIN together with the alias that points to it. */
+static void collect_alias(res_state resolver, const char *name, observation_list *observations)
+{
+    static unsigned char response[NS_MAXMSG];
+    char label[DOMAIN_SIZE + 16];
+    char answered_by[64] = "configured nameservers";
+
+    dns_query_label(ns_t_a, name, label, sizeof(label));
+
+    int len = dns_query(resolver, name, ns_t_a, response, sizeof(response), answered_by, sizeof(answered_by));
+
+    if (len < 0)
+    {
+        record_observation(observations, DNS_COLLECTOR, answered_by, label, OBS_NO_RESPONSE,
+                           "no nameserver gave a usable answer", NULL, 0);
+        return;
+    }
+
+    int aliases = dns_parse_answer(response, (size_t)len, ns_t_cname, NULL, NULL);
+    int nxdomain = (response[3] & 0x0f) == ns_r_nxdomain;
+    observation_status status = OBS_OK;
+    const char *detail = NULL;
+
+    if (aliases < 0)
+    {
+        status = OBS_ERROR;
+        detail = "malformed DNS response";
+    }
+    else if (nxdomain && aliases > 0)
+    {
+        detail = "NXDOMAIN: the alias target does not exist";
+    }
+    else if (nxdomain)
+    {
+        status = OBS_EMPTY;
+        detail = "NXDOMAIN: the name does not exist";
+    }
+    else if (aliases == 0)
+    {
+        detail = "no alias";
+    }
+
+    record_observation(observations, DNS_COLLECTOR, answered_by, label, status, detail, response, (size_t)len);
+}
+
+void dns_collect_cnames(const subdomain_list *subdomains, const struct in_addr *custom_resolver,
+                        observation_list *observations)
+{
+    struct __res_state resolver;
+
+    if (subdomains->count == 0 || open_resolver(&resolver, custom_resolver) != 0)
+    {
+        return;
+    }
+
+    size_t count = subdomains->count > MAX_CNAME_LOOKUPS ? MAX_CNAME_LOOKUPS : subdomains->count;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        collect_alias(&resolver, subdomains->items[i].name, observations);
+    }
+
+    close_resolver(&resolver);
+}
+
+void dns_interpret_cnames(const observation_list *observations, subdomain_list *subdomains)
+{
+    for (size_t i = 0; i < subdomains->count; i++)
+    {
+        subdomain_info *sub = &subdomains->items[i];
+        char label[DOMAIN_SIZE + 16];
+        string_list values = {0};
+
+        dns_query_label(ns_t_a, sub->name, label, sizeof(label));
+
+        const observation *item = find_observation(observations, DNS_COLLECTOR, label);
+
+        if (item == NULL || item->content == NULL || item->content_length < 4)
+        {
+            continue;
+        }
+
+        if (dns_parse_answer(item->content, item->content_length, ns_t_cname, &values, NULL) > 0)
+        {
+            /* The first record is the alias of the name itself; any others
+             * continue the chain. */
+            snprintf(sub->cname, sizeof(sub->cname), "%s", values.items[0]);
+            sub->cname_dangling = (item->content[3] & 0x0f) == ns_r_nxdomain;
+        }
+
+        string_list_free(&values);
+    }
 }
 
 /* Reads the recorded answer for one query into `values` (and SOA fields

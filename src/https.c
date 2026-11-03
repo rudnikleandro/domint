@@ -65,10 +65,16 @@ static int is_no_response(CURLcode code)
 
 https_response https_get(const char *url, size_t max_size)
 {
-    return https_get_timeout(url, max_size, TOTAL_TIMEOUT_SECONDS);
+    return https_request(url, max_size, TOTAL_TIMEOUT_SECONDS, NULL, NULL);
 }
 
 https_response https_get_timeout(const char *url, size_t max_size, long timeout_seconds)
+{
+    return https_request(url, max_size, timeout_seconds, NULL, NULL);
+}
+
+https_response https_request(const char *url, size_t max_size, long timeout_seconds, const char *const *headers,
+                             const char *post_body)
 {
     https_response response;
     body buffer = {NULL, 0, max_size, 0};
@@ -107,13 +113,24 @@ https_response https_get_timeout(const char *url, size_t max_size, long timeout_
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
 
-    struct curl_slist *headers = curl_slist_append(NULL, "Accept: application/rdap+json, application/json, text/plain, */*");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    struct curl_slist *header_list = curl_slist_append(NULL, "Accept: application/rdap+json, application/json, text/plain, */*");
+
+    for (size_t i = 0; headers != NULL && headers[i] != NULL; i++)
+    {
+        header_list = curl_slist_append(header_list, headers[i]);
+    }
+
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
+
+    if (post_body != NULL)
+    {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_body);
+    }
 
     CURLcode code = curl_easy_perform(curl);
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.http_code);
-    curl_slist_free_all(headers);
+    curl_slist_free_all(header_list);
     curl_easy_cleanup(curl);
 
     if (buffer.too_large)

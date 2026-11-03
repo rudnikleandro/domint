@@ -14,6 +14,18 @@
 void dns_collect(const char *domain, const char *org_domain, const struct in_addr *custom_resolver,
                  observation_list *observations);
 
+/* Subdomains get a CNAME lookup each, up to this many. */
+#define MAX_CNAME_LOOKUPS 300
+
+/* Asks the resolver for each subdomain's address, which brings back its
+ * alias chain (CNAME), so the subdomains themselves are not contacted. */
+void dns_collect_cnames(const subdomain_list *subdomains, const struct in_addr *custom_resolver,
+                        observation_list *observations);
+
+/* Fills in the alias of each subdomain from the recorded answers, and
+ * whether its target is missing (the resolver answered NXDOMAIN). */
+void dns_interpret_cnames(const observation_list *observations, subdomain_list *subdomains);
+
 /* Builds `info` from the recorded answers. */
 void dns_interpret(const char *domain, const char *org_domain, const observation_list *observations, dns_info *info);
 

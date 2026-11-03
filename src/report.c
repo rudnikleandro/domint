@@ -6,7 +6,10 @@
 #include <time.h>
 
 #include "analysis.h"
+#include "asn.h"
 #include "dns.h"
+#include "domain.h"
+#include "gaps.h"
 #include "model.h"
 #include "http.h"
 #include "subdomain.h"
@@ -23,6 +26,10 @@
 #define SOURCE_INDENT 15
 /* Names listed per group of unanswered subdomains without --full. */
 #define CONCISE_SUBDOMAINS 20
+#define REASON_WIDTH 24
+#define MAX_NAME_WIDTH 28
+
+#define COUNT(array) (sizeof(array) / sizeof((array)[0]))
 
 static void describe_certificate(const tls_info *tls, char *out, size_t size);
 
@@ -41,8 +48,17 @@ static const char *severity_tag(severity level)
     }
 }
 
+static void print_paragraph(FILE *out, int indent, const char *tag, const char *text);
+
+/* A long value with spaces (a DMARC record, a SOA line) wraps under itself. */
 static void print_field(FILE *out, const char *label, const char *value)
 {
+    if (2 + LABEL_WIDTH + strlen(value) > REPORT_WIDTH && strchr(value, ' ') != NULL)
+    {
+        print_paragraph(out, 2 + LABEL_WIDTH, label, value);
+        return;
+    }
+
     fprintf(out, "  %-*s%s\n", LABEL_WIDTH, label, value);
 }
 
@@ -182,7 +198,11 @@ static void describe_created(const domain_report *report, char *out, size_t size
 {
     const whois_info *whois = &report->whois;
 
-    if (whois->status != LOOKUP_OK)
+    if (!report_has(report, MODULE_WHOIS))
+    {
+        snprintf(out, size, "-");
+    }
+    else if (whois->status != LOOKUP_OK)
     {
         snprintf(out, size, "unknown");
     }
@@ -211,8 +231,34 @@ static void print_header(FILE *out, size_t count, const report_options *options)
     print_field(out, "Generated", generated);
     print_field(out, "Domains", domains);
 
-    print_field(out, "Mode", options->passive ? "passive (the targets were not contacted)"
-                                              : "active (one HTTP request to each target, from your IP)");
+    unsigned modules = options->modules != 0 ? options->modules : MODULE_ALL;
+    int contacts = !options->passive && (modules & (MODULE_HTTP | MODULE_TLS | MODULE_SUBDOMAINS)) != 0;
+
+    print_field(out, "Mode", contacts ? "active (the targets were contacted from your IP)"
+                                      : "passive (the targets were not contacted)");
+
+    if (modules != MODULE_ALL)
+    {
+        static const struct
+        {
+            unsigned bit;
+            const char *name;
+        } names[] = {{MODULE_ADDRESSES, "addresses"}, {MODULE_DNS, "dns"},   {MODULE_WHOIS, "whois"},
+                     {MODULE_TLS, "tls"},             {MODULE_HTTP, "http"}, {MODULE_SUBDOMAINS, "subdomains"},
+                     {MODULE_REPUTATION, "reputation"}};
+        char list[128] = "";
+
+        for (size_t i = 0; i < COUNT(names); i++)
+        {
+            if (modules & names[i].bit)
+            {
+                size_t len = strlen(list);
+                snprintf(list + len, sizeof(list) - len, "%s%s", len > 0 ? ", " : "", names[i].name);
+            }
+        }
+
+        print_field(out, "Modules", list);
+    }
 }
 
 static void print_overview(FILE *out, const domain_report *reports, size_t count)
@@ -272,21 +318,215 @@ static void print_overview(FILE *out, const domain_report *reports, size_t count
     }
 }
 
-static void print_summary(FILE *out, const domain_report *report)
+#define MAX_GAP_ITEMS 5
+
+/* One line per area with a failed source, in the SUMMARY of every mode:
+ * a missing value then reads as "unknown", not as "none". */
+static void print_gaps(FILE *out, const domain_report *report)
 {
-    char text[FIELD_SIZE * 2];
+    const char *label = "Gaps";
 
-    print_section(out, "SUMMARY");
-
-    describe_signals(report, text, sizeof(text));
-    print_field(out, "Signals", text);
-
-    if (report->observations.count > 0)
+    for (int area = 0; area < GAP_COUNT; area++)
     {
-        print_field(out, "Collected", report->observations.items[0].collected_at);
+        char text[1024];
+        size_t len = (size_t)snprintf(text, sizeof(text), "%s: ", gap_label((gap_area)area));
+        size_t found = 0;
+
+        for (size_t i = 0; i < report->observations.count; i++)
+        {
+            const observation *item = &report->observations.items[i];
+            char what[DOMAIN_SIZE + 16];
+            char why[FIELD_SIZE];
+
+            if (gap_area_of(report, item) != area)
+            {
+                continue;
+            }
+
+            if (found < MAX_GAP_ITEMS && len < sizeof(text))
+            {
+                gap_describe(item, (gap_area)area, what, sizeof(what), why, sizeof(why));
+                len += (size_t)snprintf(text + len, sizeof(text) - len, "%s%s (%s)", found > 0 ? ", " : "", what, why);
+            }
+
+            found++;
+        }
+
+        if (found == 0)
+        {
+            continue;
+        }
+
+        if (found > MAX_GAP_ITEMS && len < sizeof(text))
+        {
+            len += (size_t)snprintf(text + len, sizeof(text) - len, " and %zu more", found - MAX_GAP_ITEMS);
+        }
+
+        if (gap_impact((gap_area)area) != NULL && len < sizeof(text))
+        {
+            snprintf(text + len, sizeof(text) - len, "; %s", gap_impact((gap_area)area));
+        }
+
+        print_paragraph(out, 2 + LABEL_WIDTH, label, text);
+        label = "";
+    }
+}
+
+static void append(char *out, size_t size, const char *separator, const char *text)
+{
+    if (out[0] != '\0')
+    {
+        strncat(out, separator, size - strlen(out) - 1);
     }
 
+    strncat(out, text, size - strlen(out) - 1);
+}
+
+static int is_listed(const char *verdict)
+{
+    return verdict[0] != '\0' && strcasecmp(verdict, "not listed") != 0;
+}
+
+/* "listed: ThreatFox (2 IOCs); URLhaus (3 URLs, 1 online)" or "no listings
+ * in OTX, URLhaus, ThreatFox". */
+static void describe_reputation(const reputation_info *rep, char *out, size_t size)
+{
+    char listed[FIELD_SIZE * 2] = "";
+    char asked[FIELD_SIZE] = "";
+    char part[FIELD_SIZE];
+
+    if (rep->threatfox_status == LOOKUP_OK)
+    {
+        append(asked, sizeof(asked), ", ", "ThreatFox");
+
+        if (rep->threatfox_iocs > 0)
+        {
+            snprintf(part, sizeof(part), "ThreatFox (%ld IOC%s)", rep->threatfox_iocs, rep->threatfox_iocs == 1 ? "" : "s");
+            append(listed, sizeof(listed), "; ", part);
+        }
+    }
+
+    if (rep->urlhaus_status == LOOKUP_OK)
+    {
+        append(asked, sizeof(asked), ", ", "URLhaus");
+
+        if (rep->urlhaus_urls > 0)
+        {
+            snprintf(part, sizeof(part), "URLhaus (%ld URL%s, %ld online)", rep->urlhaus_urls,
+                     rep->urlhaus_urls == 1 ? "" : "s", rep->urlhaus_online);
+            append(listed, sizeof(listed), "; ", part);
+        }
+
+        if (is_listed(rep->spamhaus_dbl))
+        {
+            append(listed, sizeof(listed), "; ", "Spamhaus DBL");
+        }
+
+        if (is_listed(rep->surbl))
+        {
+            append(listed, sizeof(listed), "; ", "SURBL");
+        }
+    }
+
+    if (rep->otx_status == LOOKUP_OK)
+    {
+        append(asked, sizeof(asked), ", ", "OTX");
+
+        if (rep->otx_pulses > 0 && !rep->otx_allowlisted)
+        {
+            snprintf(part, sizeof(part), "OTX (%ld pulse%s)", rep->otx_pulses, rep->otx_pulses == 1 ? "" : "s");
+            append(listed, sizeof(listed), "; ", part);
+        }
+    }
+
+    if (listed[0] != '\0')
+    {
+        snprintf(out, size, "listed: %s", listed);
+    }
+    else if (asked[0] != '\0')
+    {
+        snprintf(out, size, "no listings in %s", asked);
+    }
+    else
+    {
+        snprintf(out, size, "unknown (no source answered)");
+    }
+
+    if (rep->otx_status == LOOKUP_OK && rep->otx_allowlisted)
+    {
+        strncat(out, "; OTX marks it known-good", size - strlen(out) - 1);
+    }
+
+    if (rep->urlhaus_not_queried)
+    {
+        strncat(out, "; URLhaus and ThreatFox need ABUSECH_AUTH_KEY", size - strlen(out) - 1);
+    }
+}
+
+static void print_reputation_source(FILE *out, const char *label, lookup_status status, int not_queried,
+                                    const char *text)
+{
+    if (not_queried)
+    {
+        print_field(out, label, "not queried: set ABUSECH_AUTH_KEY (free key at https://auth.abuse.ch)");
+    }
+    else if (status == LOOKUP_FAILED)
+    {
+        print_field(out, label, "lookup failed");
+    }
+    else if (status == LOOKUP_OK)
+    {
+        print_field(out, label, text);
+    }
+}
+
+static void print_reputation(FILE *out, const domain_report *report)
+{
+    const reputation_info *rep = &report->reputation;
+    char text[FIELD_SIZE * 3];
+    char names[FIELD_SIZE * 2] = "";
+
+    print_section(out, "REPUTATION");
+
+    for (size_t i = 0; i < rep->threatfox_malware.count; i++)
+    {
+        append(names, sizeof(names), ", ", rep->threatfox_malware.items[i]);
+    }
+
+    if (rep->threatfox_not_queried && rep->urlhaus_not_queried)
+    {
+        print_field(out, "abuse.ch", "URLhaus and ThreatFox not queried: set ABUSECH_AUTH_KEY (free key at "
+                                     "https://auth.abuse.ch)");
+    }
+    else
+    {
+        snprintf(text, sizeof(text), rep->threatfox_iocs > 0 ? "%ld IOC entr%s%s%s" : "no IOC entries",
+                 rep->threatfox_iocs, rep->threatfox_iocs == 1 ? "y" : "ies", names[0] != '\0' ? ": " : "", names);
+        print_reputation_source(out, "ThreatFox", rep->threatfox_status, rep->threatfox_not_queried, text);
+
+        snprintf(text, sizeof(text), "%ld malware URL%s (%ld online); Spamhaus DBL: %s; SURBL: %s", rep->urlhaus_urls,
+                 rep->urlhaus_urls == 1 ? "" : "s", rep->urlhaus_online,
+                 rep->spamhaus_dbl[0] != '\0' ? rep->spamhaus_dbl : "not listed",
+                 rep->surbl[0] != '\0' ? rep->surbl : "not listed");
+        print_reputation_source(out, "URLhaus", rep->urlhaus_status, rep->urlhaus_not_queried, text);
+    }
+
+    names[0] = '\0';
+
+    for (size_t i = 0; i < rep->otx_pulse_names.count && !rep->otx_allowlisted; i++)
+    {
+        append(names, sizeof(names), "; ", rep->otx_pulse_names.items[i]);
+    }
+
+    snprintf(text, sizeof(text), "%ld pulse%s%s%s%s", rep->otx_pulses, rep->otx_pulses == 1 ? "" : "s",
+             names[0] != '\0' ? ": " : "", names, rep->otx_allowlisted ? " (marked known-good)" : "");
+    print_reputation_source(out, "OTX", rep->otx_status, 0, text);
+}
+
+static void print_registered(FILE *out, const domain_report *report)
+{
     const whois_info *whois = &report->whois;
+    char text[FIELD_SIZE * 2];
 
     if (whois->status != LOOKUP_OK)
     {
@@ -313,24 +553,11 @@ static void print_summary(FILE *out, const domain_report *report)
         strncat(text, whois->registrar, sizeof(text) - strlen(text) - 1);
         print_field(out, "Registered", text);
     }
+}
 
-    print_field(out, "Hosting", report->hosting[0] != '\0' ? report->hosting
-                                : report->address_count > 0 ? "unknown"
-                                                            : "no addresses");
-    print_field(out, "DNS provider", report->dns_provider[0] != '\0' ? report->dns_provider : "unknown");
-    print_field(out, "Mail", report->mail_provider[0] != '\0' ? report->mail_provider : "no MX records");
-
-    if (report->tls.status == LOOKUP_OK)
-    {
-        char certificate[FIELD_SIZE * 2];
-        describe_certificate(&report->tls, certificate, sizeof(certificate));
-        print_field(out, "Certificate", certificate);
-    }
-
-    if (report->services.count > 0)
-    {
-        print_wrapped(out, 2, LABEL_WIDTH, "Services", (const char *const *)report->services.items, report->services.count);
-    }
+static void print_subdomain_summary(FILE *out, const domain_report *report)
+{
+    char text[FIELD_SIZE * 2];
 
     if (report->subdomain_status == LOOKUP_SKIPPED)
     {
@@ -346,33 +573,95 @@ static void print_summary(FILE *out, const domain_report *report)
     }
     else
     {
-        size_t live = 0;
-        int probed = 0;
+        size_t counts[SUBDOMAIN_ONLINE + 1] = {0};
 
         for (size_t i = 0; i < report->subdomains.count; i++)
         {
-            if (report->subdomains.items[i].probed)
-            {
-                probed = 1;
-
-                if (report->subdomains.items[i].is_live)
-                {
-                    live++;
-                }
-            }
+            counts[subdomain_state_of(&report->subdomains.items[i])]++;
         }
 
-        if (probed)
+        if (counts[SUBDOMAIN_NOT_PROBED] == report->subdomains.count)
         {
-            snprintf(text, sizeof(text), "%zu active online (%zu discovered)", live, report->subdomains.count);
+            snprintf(text, sizeof(text), "%zu discovered (not probed; --active checks which answer)",
+                     report->subdomains.count);
+        }
+        else if (counts[SUBDOMAIN_EDGE_ONLY] > 0)
+        {
+            snprintf(text, sizeof(text), "%zu online, %zu only reach a CDN (%zu discovered)", counts[SUBDOMAIN_ONLINE],
+                     counts[SUBDOMAIN_EDGE_ONLY], report->subdomains.count);
         }
         else
         {
-            snprintf(text, sizeof(text), "%zu discovered (passive OSINT, not probed)", report->subdomains.count);
+            snprintf(text, sizeof(text), "%zu online (%zu discovered)", counts[SUBDOMAIN_ONLINE],
+                     report->subdomains.count);
         }
 
         print_field(out, "Subdomains", text);
     }
+
+    if (report->ct_first_seen[0] != '\0')
+    {
+        snprintf(text, sizeof(text), "%s (Certificate Transparency, crt.sh)", report->ct_first_seen);
+        print_field(out, "First cert", text);
+    }
+}
+
+static void print_summary(FILE *out, const domain_report *report)
+{
+    char text[FIELD_SIZE * 2];
+
+    print_section(out, "SUMMARY");
+
+    describe_signals(report, text, sizeof(text));
+    print_field(out, "Signals", text);
+
+    if (report->observations.count > 0)
+    {
+        print_field(out, "Collected", report->observations.items[0].collected_at);
+    }
+
+    if (report_has(report, MODULE_WHOIS))
+    {
+        print_registered(out, report);
+    }
+
+    if (report_has(report, MODULE_ADDRESSES))
+    {
+        print_field(out, "Hosting", report->hosting[0] != '\0' ? report->hosting
+                                    : report->address_count > 0 ? "unknown"
+                                                                : "no addresses");
+    }
+
+    if (report_has(report, MODULE_DNS))
+    {
+        print_field(out, "DNS provider", report->dns_provider[0] != '\0' ? report->dns_provider : "unknown");
+        print_field(out, "Mail", report->mail_provider[0] != '\0' ? report->mail_provider : "no MX records");
+    }
+
+    if (report_has(report, MODULE_TLS) && report->tls.status == LOOKUP_OK)
+    {
+        char certificate[FIELD_SIZE * 2];
+        describe_certificate(&report->tls, certificate, sizeof(certificate));
+        print_field(out, "Certificate", certificate);
+    }
+
+    if (report_has(report, MODULE_DNS) && report->services.count > 0)
+    {
+        print_wrapped(out, 2, LABEL_WIDTH, "Services", (const char *const *)report->services.items, report->services.count);
+    }
+
+    if (report_has(report, MODULE_REPUTATION))
+    {
+        describe_reputation(&report->reputation, text, sizeof(text));
+        print_field(out, "Reputation", text);
+    }
+
+    if (report_has(report, MODULE_SUBDOMAINS))
+    {
+        print_subdomain_summary(out, report);
+    }
+
+    print_gaps(out, report);
 }
 
 static void print_signals(FILE *out, const domain_report *report)
@@ -473,6 +762,29 @@ static void describe_certificate(const tls_info *tls, char *out, size_t size)
     }
 }
 
+/* "Aug 21 19:50:02 2026 GMT" -> "2026-08-21 19:50 UTC", like the rest of
+ * the report; the original text when it does not parse. */
+static void certificate_date(const char *text, char *out, size_t size)
+{
+    time_t when;
+    struct tm parts;
+
+    if (text[0] == '\0')
+    {
+        snprintf(out, size, "?");
+        return;
+    }
+
+    if (tls_parse_time(text, &when) != 0)
+    {
+        snprintf(out, size, "%s", text);
+        return;
+    }
+
+    gmtime_r(&when, &parts);
+    strftime(out, size, "%Y-%m-%d %H:%M UTC", &parts);
+}
+
 static void print_tls(FILE *out, const domain_report *report)
 {
     const tls_info *tls = &report->tls;
@@ -481,7 +793,7 @@ static void print_tls(FILE *out, const domain_report *report)
 
     if (tls->not_queried)
     {
-        fprintf(out, "  Not contacted (--passive).\n");
+        fprintf(out, "  Not contacted (passive mode; --active reaches the target).\n");
         return;
     }
 
@@ -498,13 +810,23 @@ static void print_tls(FILE *out, const domain_report *report)
     }
 
     char text[FIELD_SIZE * 2];
+    char from[32];
+    char until[32];
+
+    certificate_date(tls->valid_from, from, sizeof(from));
+    certificate_date(tls->valid_until, until, sizeof(until));
 
     print_field(out, "Endpoint", tls->endpoint);
     print_field(out, "Subject", tls->subject[0] != '\0' ? tls->subject : "unknown");
     print_field(out, "Issuer", tls->issuer[0] != '\0' ? tls->issuer : "unknown");
-    snprintf(text, sizeof(text), "%s -> %s", tls->valid_from[0] != '\0' ? tls->valid_from : "?",
-             tls->valid_until[0] != '\0' ? tls->valid_until : "?");
+    snprintf(text, sizeof(text), "%s -> %s", from, until);
     print_field(out, "Valid", text);
+
+    if (tls->names.count > 0)
+    {
+        print_wrapped(out, 2, LABEL_WIDTH, "Names", (const char *const *)tls->names.items, tls->names.count);
+    }
+
     snprintf(text, sizeof(text), "%s%.400s", tls->trusted ? "yes" : "no: ", tls->trusted ? "" : tls->trust_error);
     print_field(out, "Trusted", text);
 
@@ -527,7 +849,7 @@ static void print_http(FILE *out, const domain_report *report)
 
     if (http->not_queried)
     {
-        fprintf(out, "  Not contacted (--passive).\n");
+        fprintf(out, "  Not contacted (passive mode; --active reaches the target).\n");
     }
     else if (http->attempts == 0)
     {
@@ -743,30 +1065,34 @@ static void print_whois(FILE *out, const domain_report *report)
 
 /* Every query made, in order: its outcome, what was asked and of whom. The
  * HTTP request is the only one that reached the target itself. */
-static void print_sources(FILE *out, const domain_report *report)
+static void print_source(FILE *out, const observation *item)
 {
     char asked[FIELD_SIZE * 2];
     char source[FIELD_SIZE + 32];
+    int probe = strcmp(item->collector, SUBDOMAIN_PROBE_COLLECTOR) == 0;
+    int reached_target = (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0 ||
+                          probe) &&
+                         item->status != OBS_NOT_QUERIED;
 
+    snprintf(asked, sizeof(asked), "%s %s", item->collector, item->query);
+    snprintf(source, sizeof(source), "%s%s", item->source, reached_target ? " (target, from your IP)" : "");
+    fprintf(out, "  %-12s %-34s %s\n", observation_status_name(item->status), asked, source);
+
+    if (item->detail[0] != '\0')
+    {
+        print_paragraph(out, SOURCE_INDENT, "", item->detail);
+    }
+}
+
+/* Every question asked, in order, with where it went and what came back:
+ * the audit trail behind the report, shown with --raw. */
+static void print_sources(FILE *out, const domain_report *report)
+{
     print_section(out, "SOURCES");
 
     for (size_t i = 0; i < report->observations.count; i++)
     {
-        const observation *item = &report->observations.items[i];
-        /* Subdomain probes name the URL they requested; the probe summary does not. */
-        int probe = strcmp(item->collector, SUBDOMAIN_PROBE_COLLECTOR) == 0 && strstr(item->source, "://") != NULL;
-        int reached_target = (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0 ||
-                              probe) &&
-                             item->status != OBS_NOT_QUERIED;
-
-        snprintf(asked, sizeof(asked), "%s %s", item->collector, item->query);
-        snprintf(source, sizeof(source), "%s%s", item->source, reached_target ? " (target, from your IP)" : "");
-        fprintf(out, "  %-12s %-34s %s\n", observation_status_name(item->status), asked, source);
-
-        if (item->detail[0] != '\0')
-        {
-            print_paragraph(out, SOURCE_INDENT, "", item->detail);
-        }
+        print_source(out, &report->observations.items[i]);
     }
 }
 
@@ -780,46 +1106,6 @@ static void print_raw(FILE *out, const domain_report *report)
     if (report->http.raw != NULL)
     {
         fprintf(out, "\nRAW HTTP RESPONSE (%s)\n\n%s", report->http.endpoint, report->http.raw);
-    }
-}
-
-/* Lists the subdomains that were probed without answer (probed = 1) or
- * that were never probed (probed = 0), at most `limit` of them (0: all). */
-static void print_unanswered(FILE *out, const domain_report *report, int probed, size_t limit)
-{
-    size_t shown = 0;
-    size_t hidden = 0;
-
-    for (size_t i = 0; i < report->subdomains.count; i++)
-    {
-        const subdomain_info *sub = &report->subdomains.items[i];
-
-        if (sub->probed != probed || (probed && sub->is_live))
-        {
-            continue;
-        }
-
-        if (limit > 0 && shown == limit)
-        {
-            hidden++;
-            continue;
-        }
-
-        shown++;
-
-        if (sub->ip[0] != '\0')
-        {
-            fprintf(out, "    %s (%s)\n", sub->name, sub->ip);
-        }
-        else
-        {
-            fprintf(out, "    %s\n", sub->name);
-        }
-    }
-
-    if (hidden > 0)
-    {
-        fprintf(out, "    ... and %zu more (--full lists them all)\n", hidden);
     }
 }
 
@@ -869,8 +1155,10 @@ static int short_name(const char *name, const char *domain)
     return (int)name_length;
 }
 
-/* Addresses shared by two or more live subdomains: the same server or the
- * same front end, worth knowing when mapping the infrastructure. */
+/* Addresses shared by two or more online subdomains: the same server or
+ * the same front end, worth knowing when mapping the infrastructure. A CDN
+ * edge answering for names it has no site for says nothing, so those are
+ * left out. */
 static void print_shared_addresses(FILE *out, const domain_report *report)
 {
     const subdomain_list *subs = &report->subdomains;
@@ -882,14 +1170,14 @@ static void print_shared_addresses(FILE *out, const domain_report *report)
         size_t users = 0;
         int seen = 0;
 
-        if (!first->is_live || first->ip[0] == '\0')
+        if (subdomain_state_of(first) != SUBDOMAIN_ONLINE || first->ip[0] == '\0')
         {
             continue;
         }
 
         for (size_t j = 0; j < subs->count; j++)
         {
-            if (subs->items[j].is_live && strcmp(subs->items[j].ip, first->ip) == 0)
+            if (subdomain_state_of(&subs->items[j]) == SUBDOMAIN_ONLINE && strcmp(subs->items[j].ip, first->ip) == 0)
             {
                 seen |= j < i;
                 users++;
@@ -907,37 +1195,271 @@ static void print_shared_addresses(FILE *out, const domain_report *report)
             header = 1;
         }
 
+        int column;
+
         if (first->asn[0] != '\0')
         {
             char network[FIELD_SIZE];
             network_label(first, network, sizeof(network));
-            fprintf(out, "    %s (%s), %zu subdomains: ", first->ip, network, users);
+            column = fprintf(out, "    %s (%s), %zu subdomains: ", first->ip, network, users);
         }
         else
         {
-            fprintf(out, "    %s, %zu subdomains: ", first->ip, users);
+            column = fprintf(out, "    %s, %zu subdomains: ", first->ip, users);
         }
 
-        const char *separator = "";
+        int listed = 0;
 
         for (size_t j = i; j < subs->count; j++)
         {
             const subdomain_info *sub = &subs->items[j];
 
-            if (sub->is_live && strcmp(sub->ip, first->ip) == 0)
+            if (subdomain_state_of(sub) != SUBDOMAIN_ONLINE || strcmp(sub->ip, first->ip) != 0)
             {
-                fprintf(out, "%s%.*s", separator, short_name(sub->name, report->name), sub->name);
-                separator = ", ";
+                continue;
             }
+
+            int length = short_name(sub->name, report->name);
+
+            if (listed > 0 && column + 2 + length + 1 > REPORT_WIDTH)
+            {
+                column = fprintf(out, ",\n      ") - 2;
+            }
+            else if (listed > 0)
+            {
+                column += fprintf(out, ", ");
+            }
+
+            column += fprintf(out, "%.*s", length, sub->name);
+            listed++;
         }
 
         fprintf(out, "\n");
     }
 }
 
+/* Why probing got no answer, in the order the groups are printed; any
+ * other reason is listed last as "other errors". */
+static const char *const probe_reasons[] = {"not in DNS", "timed out", "connection refused", "connection reset",
+                                            "TLS handshake failed", "empty reply"};
+
+/* The probe records "<reason>: <libcurl message>". */
+static size_t reason_index(const subdomain_info *sub)
+{
+    size_t length = strcspn(sub->error, ":");
+
+    for (size_t i = 0; i < COUNT(probe_reasons); i++)
+    {
+        if (strlen(probe_reasons[i]) == length && strncmp(sub->error, probe_reasons[i], length) == 0)
+        {
+            return i;
+        }
+    }
+
+    return COUNT(probe_reasons);
+}
+
+/* Subdomains that were never probed (probed = 0), or probed without an
+ * answer for `reason` (probed = 1). */
+/* `state` picks the group; for SUBDOMAIN_NO_ANSWER `reason` narrows it to
+ * one entry of probe_reasons (COUNT(probe_reasons) for the rest). */
+static int in_group(const subdomain_info *sub, subdomain_state state, size_t reason)
+{
+    if (subdomain_state_of(sub) != state)
+    {
+        return 0;
+    }
+
+    return state != SUBDOMAIN_NO_ANSWER || reason_index(sub) == reason;
+}
+
+/* "    label (n)               www, api, mail, ..." with short names,
+ * wrapped at the report width under the first name. At most `limit`
+ * names are listed (0: all). */
+static void print_name_group(FILE *out, const domain_report *report, const char *label, subdomain_state state,
+                             size_t reason, size_t limit)
+{
+    size_t count = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        count += in_group(&report->subdomains.items[i], state, reason);
+    }
+
+    if (count == 0)
+    {
+        return;
+    }
+
+    char heading[64] = "";
+    int start = 4;
+
+    if (label != NULL)
+    {
+        snprintf(heading, sizeof(heading), "%s (%zu)", label, count);
+        start += REASON_WIDTH;
+    }
+
+    int column = fprintf(out, "    %-*s", label != NULL ? REASON_WIDTH : 0, heading);
+    size_t shown = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (!in_group(sub, state, reason))
+        {
+            continue;
+        }
+
+        if (limit > 0 && shown == limit)
+        {
+            fprintf(out, ",\n%*s... and %zu more (--full lists them all)", start, "", count - shown);
+            break;
+        }
+
+        int length = short_name(sub->name, report->name);
+        int separator = shown > 0 ? 2 : 0;
+
+        if (shown > 0 && column + separator + length + 1 > REPORT_WIDTH)
+        {
+            column = fprintf(out, ",\n%*s", start, "") - 2;
+        }
+        else if (shown > 0)
+        {
+            column += fprintf(out, ", ");
+        }
+
+        column += fprintf(out, "%.*s", length, sub->name);
+        shown++;
+    }
+
+    fprintf(out, "\n");
+}
+
+static void print_subdomain_table(FILE *out, const domain_report *report)
+{
+    /* Columns sized to the longest short name and address, so the table
+     * reads down; a name past the cap just pushes its own line wider. */
+    int name_width = 0;
+    int ip_width = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+        int length = short_name(sub->name, report->name);
+
+        if (subdomain_state_of(sub) == SUBDOMAIN_ONLINE)
+        {
+            name_width = length > name_width ? length : name_width;
+            ip_width = (int)strlen(sub->ip) > ip_width ? (int)strlen(sub->ip) : ip_width;
+        }
+    }
+
+    name_width = name_width > MAX_NAME_WIDTH ? MAX_NAME_WIDTH : name_width;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (subdomain_state_of(sub) != SUBDOMAIN_ONLINE)
+        {
+            continue;
+        }
+
+        char code_str[32];
+        char network[FIELD_SIZE] = "";
+
+        snprintf(code_str, sizeof(code_str), "[%ld]", sub->http_code);
+
+        if (sub->ip[0] != '\0' && sub->asn[0] != '\0')
+        {
+            network_label(sub, network, sizeof(network));
+        }
+
+        char line[DOMAIN_SIZE + FIELD_SIZE * 2];
+        size_t length = (size_t)snprintf(line, sizeof(line), "    %-5s  %-5s  %-*.*s  %-*s  %s", code_str,
+                                         sub->protocol, name_width, short_name(sub->name, report->name), sub->name,
+                                         ip_width, sub->ip, network);
+
+        length = length < sizeof(line) ? length : sizeof(line) - 1;
+
+        while (length > 0 && line[length - 1] == ' ')
+        {
+            length--;
+        }
+
+        fprintf(out, "%.*s\n", (int)length, line);
+    }
+}
+
+/* Aliases that leave the domain, where a third party serves the name, and
+ * every alias whose target is gone. */
+static int is_notable_alias(const domain_report *report, const subdomain_info *sub)
+{
+    char org[DOMAIN_SIZE];
+
+    if (sub->cname[0] == '\0')
+    {
+        return 0;
+    }
+
+    organizational_domain(sub->cname, org, sizeof(org));
+    return sub->cname_dangling || strcasecmp(org, report->org_domain) != 0;
+}
+
+static void print_aliases(FILE *out, const domain_report *report, size_t limit)
+{
+    size_t count = 0;
+    int width = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (is_notable_alias(report, sub))
+        {
+            int length = short_name(sub->name, report->name);
+            width = length > width ? length : width;
+            count++;
+        }
+    }
+
+    if (count == 0)
+    {
+        return;
+    }
+
+    width = width > MAX_NAME_WIDTH ? MAX_NAME_WIDTH : width;
+    fprintf(out, "\n  Aliases to other domains (CNAME, %zu):\n\n", count);
+
+    size_t shown = 0;
+
+    for (size_t i = 0; i < report->subdomains.count; i++)
+    {
+        const subdomain_info *sub = &report->subdomains.items[i];
+
+        if (!is_notable_alias(report, sub))
+        {
+            continue;
+        }
+
+        if (limit > 0 && shown == limit)
+        {
+            fprintf(out, "    ... and %zu more (--full lists them all)\n", count - shown);
+            break;
+        }
+
+        fprintf(out, "    %-*.*s  -> %s%s\n", width, short_name(sub->name, report->name), sub->name, sub->cname,
+                sub->cname_dangling ? "  (target does not exist)" : "");
+        shown++;
+    }
+}
+
 static void print_subdomains(FILE *out, const domain_report *report, int full)
 {
     size_t limit = full ? 0 : CONCISE_SUBDOMAINS;
+    size_t counts[SUBDOMAIN_ONLINE + 1] = {0};
 
     print_section(out, "SUBDOMAINS");
 
@@ -959,95 +1481,56 @@ static void print_subdomains(FILE *out, const domain_report *report, int full)
         return;
     }
 
-    size_t live = 0;
-    int probed = 0;
-
     for (size_t i = 0; i < report->subdomains.count; i++)
     {
-        const subdomain_info *sub = &report->subdomains.items[i];
-
-        if (sub->probed)
-        {
-            probed = 1;
-
-            if (sub->is_live)
-            {
-                live++;
-            }
-        }
+        counts[subdomain_state_of(&report->subdomains.items[i])]++;
     }
 
-    if (!probed)
+    if (counts[SUBDOMAIN_NOT_PROBED] == report->subdomains.count)
     {
-        fprintf(out, "  Discovered %zu subdomain%s via passive sources (CT logs / OSINT, not probed):\n\n",
-                report->subdomains.count, report->subdomains.count == 1 ? "" : "s");
-        print_unanswered(out, report, 0, limit);
+        fprintf(out, "  %zu discovered in passive sources, not probed (--active checks which answer):\n\n",
+                report->subdomains.count);
+        print_name_group(out, report, NULL, SUBDOMAIN_NOT_PROBED, 0, limit);
+        print_aliases(out, report, limit);
         return;
     }
 
-    if (live == 0)
+    if (counts[SUBDOMAIN_ONLINE] == 0)
     {
-        fprintf(out, "  None of the %zu discovered subdomains responded to HTTP/HTTPS.\n", report->subdomains.count);
+        fprintf(out, "  None of the %zu discovered subdomains serves a site over HTTP/HTTPS.\n",
+                report->subdomains.count);
     }
     else
     {
-        fprintf(out, "  %zu active subdomain%s responding to HTTP/HTTPS (%zu discovered via OSINT):\n\n",
-                live, live == 1 ? "" : "s", report->subdomains.count);
-    }
-
-    for (size_t i = 0; i < report->subdomains.count; i++)
-    {
-        const subdomain_info *sub = &report->subdomains.items[i];
-
-        if (sub->probed && sub->is_live)
-        {
-            char code_str[32];
-            snprintf(code_str, sizeof(code_str), "[%ld]", sub->http_code);
-
-            if (sub->ip[0] != '\0' && sub->asn[0] != '\0')
-            {
-                char network[FIELD_SIZE];
-                network_label(sub, network, sizeof(network));
-                fprintf(out, "    %-6s %s://%s (%s, %s)\n", code_str, sub->protocol, sub->name, sub->ip, network);
-            }
-            else if (sub->ip[0] != '\0')
-            {
-                fprintf(out, "    %-6s %s://%s (%s)\n", code_str, sub->protocol, sub->name, sub->ip);
-            }
-            else
-            {
-                fprintf(out, "    %-6s %s://%s\n", code_str, sub->protocol, sub->name);
-            }
-        }
+        fprintf(out, "  %zu online, answering over HTTP/HTTPS (%zu discovered):\n\n", counts[SUBDOMAIN_ONLINE],
+                report->subdomains.count);
+        print_subdomain_table(out, report);
     }
 
     print_shared_addresses(out, report);
+    print_aliases(out, report, limit);
 
-    size_t silent = 0;
-    size_t skipped = 0;
-
-    for (size_t i = 0; i < report->subdomains.count; i++)
+    if (counts[SUBDOMAIN_EDGE_ONLY] > 0)
     {
-        if (!report->subdomains.items[i].probed)
+        fprintf(out, "\n  Only a CDN answers, no site configured (%zu):\n\n", counts[SUBDOMAIN_EDGE_ONLY]);
+        print_name_group(out, report, NULL, SUBDOMAIN_EDGE_ONLY, 0, limit);
+    }
+
+    if (counts[SUBDOMAIN_NO_ANSWER] > 0)
+    {
+        fprintf(out, "\n  No HTTP/HTTPS response (%zu):\n\n", counts[SUBDOMAIN_NO_ANSWER]);
+
+        for (size_t reason = 0; reason <= COUNT(probe_reasons); reason++)
         {
-            skipped++;
-        }
-        else if (!report->subdomains.items[i].is_live)
-        {
-            silent++;
+            print_name_group(out, report, reason < COUNT(probe_reasons) ? probe_reasons[reason] : "other errors",
+                             SUBDOMAIN_NO_ANSWER, reason, limit);
         }
     }
 
-    if (silent > 0)
+    if (counts[SUBDOMAIN_NOT_PROBED] > 0)
     {
-        fprintf(out, "\n  No HTTP/HTTPS response (%zu):\n\n", silent);
-        print_unanswered(out, report, 1, limit);
-    }
-
-    if (skipped > 0)
-    {
-        fprintf(out, "\n  Not probed, over the probe limit (%zu):\n\n", skipped);
-        print_unanswered(out, report, 0, limit);
+        fprintf(out, "\n  Not probed, over the probe limit (%zu):\n\n", counts[SUBDOMAIN_NOT_PROBED]);
+        print_name_group(out, report, NULL, SUBDOMAIN_NOT_PROBED, 0, limit);
     }
 }
 
@@ -1055,25 +1538,52 @@ static void print_domain(FILE *out, const domain_report *report, const report_op
 {
     fprintf(out, "\n\n%s\n%s\n%s\n", RULE, report->name, RULE);
 
+    /* A module picked on the command line is what the user asked to see. */
+    int details = options->full || options->selected;
+
     print_summary(out, report);
     print_signals(out, report);
 
-    if (options->full)
+    if (details && report_has(report, MODULE_ADDRESSES))
     {
         print_addresses(out, report);
-        print_http(out, report);
-        print_tls(out, report);
-        print_dns(out, report);
-        print_whois(out, report);
-        print_sources(out, report);
-
-        if (options->raw)
-        {
-            print_raw(out, report);
-        }
     }
 
-    print_subdomains(out, report, options->full);
+    if (details && report_has(report, MODULE_HTTP))
+    {
+        print_http(out, report);
+    }
+
+    if (details && report_has(report, MODULE_TLS))
+    {
+        print_tls(out, report);
+    }
+
+    if (details && report_has(report, MODULE_DNS))
+    {
+        print_dns(out, report);
+    }
+
+    if (details && report_has(report, MODULE_WHOIS))
+    {
+        print_whois(out, report);
+    }
+
+    if (details && report_has(report, MODULE_REPUTATION))
+    {
+        print_reputation(out, report);
+    }
+
+    if (options->raw)
+    {
+        print_sources(out, report);
+        print_raw(out, report);
+    }
+
+    if (report_has(report, MODULE_SUBDOMAINS))
+    {
+        print_subdomains(out, report, details);
+    }
 }
 
 static const char *strength_title(link_strength strength)
@@ -1186,7 +1696,7 @@ static void print_all_subdomains(FILE *out, const domain_report *reports, size_t
 
             for (size_t j = 0; j < reports[i].subdomains.count; j++)
             {
-                live += reports[i].subdomains.items[j].is_live;
+                live += subdomain_state_of(&reports[i].subdomains.items[j]) == SUBDOMAIN_ONLINE;
             }
 
             fprintf(out, "  %-40s %zu discovered, %zu online\n", reports[i].name, reports[i].subdomains.count, live);
@@ -1207,7 +1717,7 @@ static void print_all_subdomains(FILE *out, const domain_report *reports, size_t
             {
                 const subdomain_info *sub = &reports[i].subdomains.items[j];
 
-                if (sub->probed && sub->is_live)
+                if (subdomain_state_of(sub) == SUBDOMAIN_ONLINE)
                 {
                     char code_str[24];
 
@@ -1244,6 +1754,9 @@ void print_report(FILE *out, const domain_report *reports, size_t count, const c
     if (count > 1)
     {
         print_correlation(out, reports, count, links);
-        print_all_subdomains(out, reports, count, options->full);
+        if (options->modules == 0 || (options->modules & MODULE_SUBDOMAINS))
+        {
+            print_all_subdomains(out, reports, count, options->full);
+        }
     }
 }

@@ -17,11 +17,14 @@
 
 typedef struct
 {
+    int active;
     int passive;
     int full;
     int raw;
+    int json;
     int no_subdomains;
     int no_probe;
+    unsigned modules; /* MODULE_* picked with -a, -d, -w, -t, -H, -s; 0: all */
     const char *resolver;
     const char *input_file;
     const char *output_file;
@@ -32,12 +35,30 @@ static void print_usage(FILE *out, const char *program)
     fprintf(out, "Usage: %s [options] <domain> [domain ...]\n", program);
     fprintf(out, "       %s [options] -f <file>\n", program);
     fprintf(out, "\n");
+    fprintf(out, "Modules (default: all of them; pick one or more, e.g. -wd):\n");
+    fprintf(out, "  -a, --addresses        Addresses, reverse DNS and network (ASN)\n");
+    fprintf(out, "  -d, --dns              DNS records: NS, MX, SPF, DMARC, CAA, DNSSEC, SOA, TXT\n");
+    fprintf(out, "  -w, --whois            Registration data (RDAP, falling back to WHOIS)\n");
+    fprintf(out, "  -t, --tls              TLS certificate on port 443 (contacts the target)\n");
+    fprintf(out, "  -H, --http             HTTP response on port 80 (contacts the target)\n");
+    fprintf(out, "  -s, --subdomains       Subdomains from passive sources, with their CNAMEs;\n");
+    fprintf(out, "                         with --active, which of them answer over HTTP/HTTPS\n");
+    fprintf(out, "  -r, --reputation       Threat intel: AlienVault OTX, plus abuse.ch URLhaus\n");
+    fprintf(out, "                         and ThreatFox when ABUSECH_AUTH_KEY holds a key\n");
+    fprintf(out, "Picked modules show their full sections.\n");
+    fprintf(out, "\n");
     fprintf(out, "Options:\n");
-    fprintf(out, "  -f, --file <path>      Read domains from a file, one per line (# starts a comment)\n");
+    fprintf(out, "  -f, --file <path>      Read domains from a file, one per line (# comments)\n");
     fprintf(out, "  -o, --output <path>    Write the report to a file instead of the terminal\n");
-    fprintf(out, "      --full             Include the collected data and every source queried\n");
-    fprintf(out, "      --raw              Also append the raw WHOIS and HTTP responses\n");
-    fprintf(out, "      --passive          Do not contact the targets (skips the HTTP request)\n");
+    fprintf(out, "  -j, --json             Write the report as JSON (for MISP, OpenCTI, a SIEM...)\n");
+    fprintf(out, "      --full             Show every section with the collected data\n");
+    fprintf(out, "      --raw              Also list every query made (SOURCES) and append the raw\n");
+    fprintf(out, "                         WHOIS and HTTP responses\n");
+    fprintf(out, "      --active           Contact the targets from your IP: HTTP and TLS requests\n");
+    fprintf(out, "                         and subdomain probes. The default is passive: only\n");
+    fprintf(out, "                         third-party sources are asked (-t and -H still reach\n");
+    fprintf(out, "                         the target)\n");
+    fprintf(out, "      --passive          Never contact the targets, even with -t or -H\n");
     fprintf(out, "      --no-subdomains    Skip passive subdomain enumeration\n");
     fprintf(out, "      --no-probe         Skip HTTP/HTTPS liveness probing of subdomains\n");
     fprintf(out, "      --resolver <ipv4>  Send the DNS record queries to this resolver; it will\n");
@@ -109,6 +130,63 @@ static double seconds_since(const struct timespec *start)
 }
 
 /* Returns 0 to go on, 1 to stop with an error. Sets *done after --help. */
+static const struct
+{
+    char letter;
+    const char *name;
+    unsigned module;
+} module_flags[] = {{'a', "--addresses", MODULE_ADDRESSES}, {'d', "--dns", MODULE_DNS},
+                    {'w', "--whois", MODULE_WHOIS},         {'t', "--tls", MODULE_TLS},
+                    {'H', "--http", MODULE_HTTP},           {'s', "--subdomains", MODULE_SUBDOMAINS},
+                    {'r', "--reputation", MODULE_REPUTATION}};
+
+static unsigned module_of_letter(char letter)
+{
+    for (size_t i = 0; i < sizeof(module_flags) / sizeof(module_flags[0]); i++)
+    {
+        if (module_flags[i].letter == letter)
+        {
+            return module_flags[i].module;
+        }
+    }
+
+    return 0;
+}
+
+/* The modules in "--dns" or in "-w", "-wd", "-adw": short module flags can be
+ * combined. Returns 0 when `arg` is not a module flag. */
+static unsigned parse_module_flag(const char *arg)
+{
+    for (size_t i = 0; i < sizeof(module_flags) / sizeof(module_flags[0]); i++)
+    {
+        if (strcmp(arg, module_flags[i].name) == 0)
+        {
+            return module_flags[i].module;
+        }
+    }
+
+    if (arg[0] != '-' || arg[1] == '-' || arg[1] == '\0')
+    {
+        return 0;
+    }
+
+    unsigned modules = 0;
+
+    for (const char *letter = arg + 1; *letter != '\0'; letter++)
+    {
+        unsigned module = module_of_letter(*letter);
+
+        if (module == 0)
+        {
+            return 0;
+        }
+
+        modules |= module;
+    }
+
+    return modules;
+}
+
 static int parse_arguments(int argc, char *argv[], options *opts, string_list *domains, int *done)
 {
     for (int i = 1; i < argc; i++)
@@ -116,7 +194,13 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         const char *arg = argv[i];
         int has_value = i + 1 < argc;
 
-        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
+        unsigned modules = parse_module_flag(arg);
+
+        if (modules != 0)
+        {
+            opts->modules |= modules;
+        }
+        else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
         {
             print_usage(stdout, argv[0]);
             *done = 1;
@@ -125,6 +209,10 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         else if (strcmp(arg, "--passive") == 0)
         {
             opts->passive = 1;
+        }
+        else if (strcmp(arg, "--active") == 0)
+        {
+            opts->active = 1;
         }
         else if (strcmp(arg, "--no-subdomains") == 0)
         {
@@ -141,6 +229,10 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         else if (strcmp(arg, "--raw") == 0)
         {
             opts->raw = 1;
+        }
+        else if (strcmp(arg, "-j") == 0 || strcmp(arg, "--json") == 0)
+        {
+            opts->json = 1;
         }
         else if (strcmp(arg, "--resolver") == 0 && has_value)
         {
@@ -164,6 +256,18 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         {
             add_domain(domains, arg);
         }
+    }
+
+    if (opts->active && opts->passive)
+    {
+        fprintf(stderr, "--active and --passive cannot be used together.\n");
+        return 1;
+    }
+
+    if (opts->modules == MODULE_SUBDOMAINS && opts->no_subdomains)
+    {
+        fprintf(stderr, "--no-subdomains leaves no module to run with -s.\n");
+        return 1;
     }
 
     if (opts->input_file != NULL && read_domain_file(opts->input_file, domains) != 0)
@@ -238,6 +342,23 @@ int main(int argc, char *argv[])
         }
     }
 
+    unsigned modules = opts.modules != 0 ? opts.modules : MODULE_ALL;
+
+    if (opts.no_subdomains)
+    {
+        modules &= ~MODULE_SUBDOMAINS;
+    }
+
+    /* Asking for -t or -H is asking for the request they make. */
+    collect_options collect = {0};
+    collect.contact_target = !opts.passive && (opts.active || (opts.modules & (MODULE_TLS | MODULE_HTTP)) != 0);
+    collect.probe_subdomains = !opts.passive && opts.active && !opts.no_probe;
+    collect.no_probe = opts.no_probe;
+    collect.resolver = custom_resolver;
+
+    int contacted = (collect.contact_target && (modules & (MODULE_TLS | MODULE_HTTP)) != 0) ||
+                    (collect.probe_subdomains && (modules & MODULE_SUBDOMAINS) != 0);
+
     domain_report *reports = xcalloc(domains.count, sizeof(*reports));
 
     for (size_t i = 0; i < domains.count; i++)
@@ -246,10 +367,11 @@ int main(int argc, char *argv[])
         struct timespec start;
 
         snprintf(report->name, sizeof(report->name), "%s", domains.items[i]);
-        progress_begin(i + 1, domains.count, report->name);
+        report->modules = modules;
+        progress_begin(i + 1, domains.count, report->name, collect_steps(report));
 
         clock_gettime(CLOCK_MONOTONIC, &start);
-        collect_domain(report, opts.passive, opts.no_subdomains, opts.no_probe, custom_resolver);
+        collect_domain(report, &collect);
         interpret_domain(report);
 
         progress_end(seconds_since(&start));
@@ -262,8 +384,15 @@ int main(int argc, char *argv[])
         correlate(reports, domains.count, &links);
     }
 
-    report_options report_opts = {opts.passive, opts.full || opts.raw, opts.raw};
-    print_report(out, reports, domains.count, &links, &report_opts);
+    report_options report_opts = {!contacted, opts.full || opts.raw, opts.raw, modules, opts.modules != 0};
+    if (opts.json)
+    {
+        print_report_json(out, reports, domains.count, &links, &report_opts);
+    }
+    else
+    {
+        print_report(out, reports, domains.count, &links, &report_opts);
+    }
 
     int status = 0;
 

@@ -21,7 +21,7 @@
  * organizations is tens of megabytes sent slowly. */
 #define CRTSH_MAX_SIZE (64 * 1024 * 1024)
 #define CRTSH_TIMEOUT_SECONDS 60L
-#define MAX_PROBED_SUBDOMAINS 50
+#define MAX_PROBED_SUBDOMAINS 100
 #define PROBE_PARALLEL 16
 #define PROBE_CONNECT_TIMEOUT 2L
 #define PROBE_TOTAL_TIMEOUT 3L
@@ -416,6 +416,47 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
 
 static void apply_probes(const observation_list *observations, subdomain_list *subdomains);
 
+void subdomain_ct_first_seen(const observation_list *observations, const char *domain, char *out, size_t size)
+{
+    static const char key[] = "\"not_before\":\"";
+
+    out[0] = '\0';
+
+    for (size_t i = 0; i < observations->count; i++)
+    {
+        const observation *obs = &observations->items[i];
+
+        if (strcmp(obs->collector, SUBDOMAIN_COLLECTOR) != 0 || strcmp(obs->source, "crt.sh") != 0 ||
+            strcmp(obs->query, domain) != 0 || obs->status != OBS_OK || obs->content == NULL)
+        {
+            continue;
+        }
+
+        /* Every entry carries an ISO 8601 "not_before", which sorts as text;
+         * a plain scan avoids parsing what can be megabytes of JSON again. */
+        char *text = observation_text(obs);
+        char earliest[32] = "";
+
+        for (const char *p = strstr(text, key); p != NULL; p = strstr(p, key))
+        {
+            p += sizeof(key) - 1;
+
+            size_t length = strcspn(p, "\"");
+
+            if (length >= 10 && length < sizeof(earliest) &&
+                (earliest[0] == '\0' || strncmp(p, earliest, length) < 0))
+            {
+                memcpy(earliest, p, length);
+                earliest[length] = '\0';
+            }
+        }
+
+        free(text);
+        snprintf(out, size, "%.10s", earliest);
+        return;
+    }
+}
+
 void subdomain_interpret(const char *domain, const observation_list *observations,
                          subdomain_list *subdomains, lookup_status *status)
 {
@@ -671,7 +712,9 @@ static void probe_finish(probe *p, CURLcode result)
 {
     char *primary_ip = NULL;
 
-    p->result = result == CURLE_WRITE_ERROR && p->body_full ? CURLE_OK : result;
+    /* Stopping at PROBE_BODY_MAX surfaces as a write error, or over HTTP/2
+     * as a receive error; either way the response had arrived. */
+    p->result = p->body_full ? CURLE_OK : result;
 
     if (curl_easy_getinfo(p->curl, CURLINFO_PRIMARY_IP, &primary_ip) == CURLE_OK && primary_ip != NULL)
     {
@@ -755,6 +798,29 @@ static int is_no_answer(CURLcode code)
            code == CURLE_RECV_ERROR || code == CURLE_SEND_ERROR || code == CURLE_GOT_NOTHING;
 }
 
+/* A short reason for a failed probe, so the report can group them. */
+static const char *probe_reason(CURLcode code)
+{
+    switch (code)
+    {
+    case CURLE_COULDNT_RESOLVE_HOST:
+        return "not in DNS";
+    case CURLE_OPERATION_TIMEDOUT:
+        return "timed out";
+    case CURLE_COULDNT_CONNECT:
+        return "connection refused";
+    case CURLE_SSL_CONNECT_ERROR:
+        return "TLS handshake failed";
+    case CURLE_RECV_ERROR:
+    case CURLE_SEND_ERROR:
+        return "connection reset";
+    case CURLE_GOT_NOTHING:
+        return "empty reply";
+    default:
+        return "error";
+    }
+}
+
 /* Source "https://192.0.2.10:443": the scheme and the address that
  * answered, or the name when no connection was made. */
 static void probe_record(const probe *p, observation_list *observations)
@@ -782,9 +848,13 @@ static void probe_record(const probe *p, observation_list *observations)
         return;
     }
 
+    /* "<reason>: <libcurl message>"; the report groups by the reason. */
+    char detail[FIELD_SIZE + CURL_ERROR_SIZE];
+    snprintf(detail, sizeof(detail), "%s: %s", probe_reason(p->result),
+             p->error[0] != '\0' ? p->error : curl_easy_strerror(p->result));
+
     record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, source, p->name,
-                       is_no_answer(p->result) ? OBS_NO_RESPONSE : OBS_ERROR,
-                       p->error[0] != '\0' ? p->error : curl_easy_strerror(p->result), NULL, 0);
+                       is_no_answer(p->result) ? OBS_NO_RESPONSE : OBS_ERROR, detail, NULL, 0);
 }
 
 /* The address in a probe source, or "" when it names the host. */
@@ -852,6 +922,22 @@ static void probe_parse(const char *text, subdomain_info *sub)
     extract_title(body != NULL ? body + 4 : "", sub->title, sizeof(sub->title));
 }
 
+/* Clears what a previous attempt left, keeping the name and its alias. */
+static void reset_probe(subdomain_info *sub)
+{
+    sub->probed = 0;
+    sub->is_live = 0;
+    sub->http_code = 0;
+    sub->protocol[0] = '\0';
+    sub->ip[0] = '\0';
+    sub->asn[0] = '\0';
+    sub->as_name[0] = '\0';
+    sub->location[0] = '\0';
+    sub->server[0] = '\0';
+    sub->title[0] = '\0';
+    sub->error[0] = '\0';
+}
+
 static int compare_name(const void *key, const void *item)
 {
     return strcasecmp(key, ((const subdomain_info *)item)->name);
@@ -880,11 +966,7 @@ static void apply_probes(const observation_list *observations, subdomain_list *s
             continue;
         }
 
-        char name[DOMAIN_SIZE];
-        snprintf(name, sizeof(name), "%s", sub->name);
-        memset(sub, 0, sizeof(*sub));
-        snprintf(sub->name, sizeof(sub->name), "%s", name);
-
+        reset_probe(sub);
         sub->probed = 1;
         probe_source_ip(obs->source, sub->protocol, sizeof(sub->protocol), sub->ip, sizeof(sub->ip));
 
@@ -902,20 +984,98 @@ static void apply_probes(const observation_list *observations, subdomain_list *s
     }
 }
 
+/* Names an analyst checks first: the main web and mail hosts, then remote
+ * access, admin panels and non-production environments. */
+static int probe_priority(const char *name, const char *domain)
+{
+    static const char *const first[] = {"www", "mail", "webmail", "owa", "autodiscover", "vpn", "remote", "portal",
+                                        "login", "sso", "auth", "admin", "api", "app"};
+    static const char *const keywords[] = {"admin", "vpn", "portal", "intranet", "internal", "corp", "jenkins", "jira",
+                                           "grafana", "gitlab", "git", "kibana", "sso", "login", "auth", "api", "dev",
+                                           "test", "stag", "hml", "homol", "uat", "qa", "sandbox", "beta", "backup"};
+    size_t name_length = strlen(name);
+    size_t domain_length = strlen(domain);
+
+    if (name_length <= domain_length + 1)
+    {
+        return 2;
+    }
+
+    char prefix[DOMAIN_SIZE];
+    snprintf(prefix, sizeof(prefix), "%.*s", (int)(name_length - domain_length - 1), name);
+
+    for (size_t i = 0; i < sizeof(first) / sizeof(first[0]); i++)
+    {
+        if (strcmp(prefix, first[i]) == 0)
+        {
+            return 0;
+        }
+    }
+
+    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
+    {
+        if (strstr(prefix, keywords[i]) != NULL)
+        {
+            return 1;
+        }
+    }
+
+    return 2;
+}
+
+typedef struct
+{
+    size_t index;
+    int priority;
+    int depth;
+    const char *name;
+} probe_candidate;
+
+/* Priority, then names closer to the domain, then alphabetical. */
+static int compare_candidates(const void *a, const void *b)
+{
+    const probe_candidate *x = a;
+    const probe_candidate *y = b;
+
+    if (x->priority != y->priority)
+    {
+        return x->priority - y->priority;
+    }
+
+    if (x->depth != y->depth)
+    {
+        return x->depth - y->depth;
+    }
+
+    return strcmp(x->name, y->name);
+}
+
+static int label_count(const char *name)
+{
+    int count = 1;
+
+    for (const char *p = name; *p != '\0'; p++)
+    {
+        count += *p == '.';
+    }
+
+    return count;
+}
+
 void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
                      observation_list *observations, const char *domain)
 {
-    if (passive)
-    {
-        record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, "target", domain, OBS_NOT_QUERIED,
-                           "--passive: subdomain targets are not contacted", NULL, 0);
-        return;
-    }
-
     if (no_probe)
     {
         record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, "target", domain, OBS_NOT_QUERIED,
                            "--no-probe: subdomain HTTP probing skipped", NULL, 0);
+        return;
+    }
+
+    if (passive)
+    {
+        record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, "target", domain, OBS_NOT_QUERIED,
+                           "passive mode: subdomains are not contacted (--active to probe them)", NULL, 0);
         return;
     }
 
@@ -925,6 +1085,18 @@ void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
     }
 
     size_t to_probe = subdomains->count > MAX_PROBED_SUBDOMAINS ? MAX_PROBED_SUBDOMAINS : subdomains->count;
+    probe_candidate *candidates = xcalloc(subdomains->count, sizeof(*candidates));
+
+    for (size_t i = 0; i < subdomains->count; i++)
+    {
+        candidates[i].index = i;
+        candidates[i].name = subdomains->items[i].name;
+        candidates[i].priority = probe_priority(subdomains->items[i].name, domain);
+        candidates[i].depth = label_count(subdomains->items[i].name);
+    }
+
+    qsort(candidates, subdomains->count, sizeof(*candidates), compare_candidates);
+
     probe *secure = xcalloc(to_probe, sizeof(*secure));
     probe *plain = xcalloc(to_probe, sizeof(*plain));
     size_t plain_count = 0;
@@ -932,9 +1104,11 @@ void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
     /* HTTPS first; plain HTTP only for the names that did not answer. */
     for (size_t i = 0; i < to_probe; i++)
     {
-        secure[i].name = subdomains->items[i].name;
+        secure[i].name = subdomains->items[candidates[i].index].name;
         secure[i].is_https = 1;
     }
+
+    free(candidates);
 
     probe_run(secure, to_probe);
 
@@ -978,11 +1152,11 @@ void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
     size_t code_403 = 0;
     size_t code_redir = 0;
 
-    for (size_t i = 0; i < to_probe; i++)
+    for (size_t i = 0; i < subdomains->count; i++)
     {
         const subdomain_info *sub = &subdomains->items[i];
 
-        if (sub->is_live)
+        if (sub->probed && sub->is_live)
         {
             live_count++;
 

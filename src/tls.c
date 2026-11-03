@@ -191,12 +191,51 @@ static void copy_field(const char *line, const char *name, char *out, size_t siz
     }
 }
 
+/* "DNS:a.example, DNS:b.example, IP Address:192.0.2.1" -> the DNS names. */
+static void read_alt_names(const char *line, string_list *names)
+{
+    static const char field[] = "X509v3 Subject Alternative Name:";
+
+    if (strncmp(line, field, sizeof(field) - 1) != 0)
+    {
+        return;
+    }
+
+    const char *p = line + sizeof(field) - 1;
+    const char *end = p + strcspn(p, "\r\n");
+
+    while (p < end)
+    {
+        while (p < end && (*p == ' ' || *p == ','))
+        {
+            p++;
+        }
+
+        size_t length = 0;
+
+        while (p + length < end && p[length] != ',')
+        {
+            length++;
+        }
+
+        if (length > 4 && strncmp(p, "DNS:", 4) == 0 && length - 4 < DOMAIN_SIZE)
+        {
+            char name[DOMAIN_SIZE];
+            snprintf(name, sizeof(name), "%.*s", (int)(length - 4), p + 4);
+            string_list_add_unique(names, name);
+        }
+
+        p += length;
+    }
+}
+
 void tls_parse(const char *certificate, tls_info *tls)
 {
     const char *line = certificate;
 
     while (line != NULL && *line != '\0')
     {
+        read_alt_names(line, &tls->names);
         copy_field(line, "Subject", tls->subject, sizeof(tls->subject));
         copy_field(line, "Issuer", tls->issuer, sizeof(tls->issuer));
         copy_field(line, "Start date", tls->valid_from, sizeof(tls->valid_from));

@@ -114,6 +114,9 @@ void test_sources(void)
     CHECK_STR(tls.issuer, "C = US, O = SSL Corporation, CN = Cloudflare TLS Issuing ECC CA 3");
     CHECK_STR(tls.valid_until, "Dec 25 22:56:35 2026 GMT");
     CHECK_STR(tls.serial, "01eee6aabb521d5e14fc315fd9985690");
+    CHECK(string_list_contains(&tls.names, "example.com"));
+    CHECK(string_list_contains(&tls.names, "*.example.com"));
+    string_list_free(&tls.names);
     CHECK_INT(tls_parse_time(tls.valid_until, &until), 0);
     CHECK_INT((long)until, 1798239395L);
     CHECK_INT(tls_parse_time("garbage", &until), -1);

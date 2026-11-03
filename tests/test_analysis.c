@@ -366,4 +366,27 @@ void test_source_signals(void)
     analyze_domain(&report);
     CHECK_INT(report.finding_count, 0);
     domain_report_free(&report);
+
+    /* Only the modules that ran are judged: with WHOIS alone, mail records
+     * that were never asked for are not reported missing. */
+    make_report(&report, "whois-only.example", 3650);
+    report.modules = MODULE_WHOIS;
+    replace_list(&report.dns.txt.values, NULL);
+    replace_list(&report.dns.dmarc.values, NULL);
+    analyze_domain(&report);
+    CHECK(!has_finding(&report, SEVERITY_MEDIUM, "No SPF record"));
+    CHECK(!has_finding(&report, SEVERITY_MEDIUM, "No DMARC policy"));
+    domain_report_free(&report);
+
+    /* With DNS alone the registry was not asked, so the name counts as
+     * registered for the CAA check. */
+    make_report(&report, "dns-only.example", 3650);
+    report.modules = MODULE_DNS;
+    report.whois.status = LOOKUP_SKIPPED;
+    report.whois.registered = 0;
+    replace_list(&report.dns.caa.values, NULL);
+    analyze_domain(&report);
+    CHECK(has_finding(&report, SEVERITY_INFO, "No CAA record"));
+    CHECK(!has_finding(&report, SEVERITY_INFO, "Registration data unavailable"));
+    domain_report_free(&report);
 }

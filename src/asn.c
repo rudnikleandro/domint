@@ -8,7 +8,6 @@
 #include "whois.h"
 
 #define CYMRU_WHOIS_SERVER "whois.cymru.com"
-#define ASN_COLLECTOR "asn"
 #define CYMRU_FIELD_COUNT 7
 
 static void trim_spaces(char *str)

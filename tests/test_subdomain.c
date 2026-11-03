@@ -1,8 +1,12 @@
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 
 #include "analysis.h"
+#include "dns.h"
+#include "json.h"
 #include "model.h"
+#include "reputation.h"
 #include "report.h"
 #include "subdomain.h"
 #include "test.h"
@@ -72,11 +76,11 @@ static void test_subdomain_infrastructure(void)
     print_report(out, &report, 1, NULL, &options);
     fclose(out);
 
-    CHECK(strstr(text, "[403]  https://homol-api.example.com (192.0.2.10, AS20940 Akamai)") != NULL);
-    CHECK(strstr(text, "https://collab.example.com (192.0.2.20, AS64500 Example Networks Ltd)") != NULL);
+    CHECK(strstr(text, "    [403]  https  homol-api  192.0.2.10  AS20940 Akamai\n") != NULL);
+    CHECK(strstr(text, "    [200]  https  collab     192.0.2.20  AS64500 Example Networks Ltd\n") != NULL);
     CHECK(strstr(text, "192.0.2.10 (AS20940 Akamai), 3 subdomains: homol-api, stagging, www") != NULL);
     CHECK(strstr(text, "192.0.2.20 (") == NULL);
-    CHECK(strstr(text, "    dev2.example.com") != NULL);
+    CHECK(strstr(text, "    other errors (1)        dev2\n") != NULL);
 
     free(text);
     domain_report_free(&report);
@@ -294,22 +298,314 @@ static void test_concise_subdomain_list(void)
     }
 
     char *text = render(&report);
-    CHECK(strstr(text, "    host19.example.com\n") != NULL);
-    CHECK(strstr(text, "host20.example.com") == NULL);
+    CHECK(strstr(text, "    host00, host01, host02") != NULL);
+    CHECK(strstr(text, "host19,\n") != NULL);
+    CHECK(strstr(text, "host20") == NULL);
     CHECK(strstr(text, "... and 10 more (--full lists them all)") != NULL);
     free(text);
 
     char *full_text = NULL;
     size_t length = 0;
     FILE *out = open_memstream(&full_text, &length);
-    report_options options = {0, 1, 0};
+    report_options options = {.full = 1};
 
     print_report(out, &report, 1, NULL, &options);
     fclose(out);
-    CHECK(strstr(full_text, "    host29.example.com\n") != NULL);
+    CHECK(strstr(full_text, "host29\n") != NULL);
     CHECK(strstr(full_text, "more (--full") == NULL);
     free(full_text);
 
+    domain_report_free(&report);
+}
+
+/* Unanswered subdomains are grouped by reason, and the SOURCES section
+ * sums up the probes unless --raw asks for each request. */
+static void test_probe_report_grouping(void)
+{
+    const char *names = "a.example.com\nb.example.com\nc.example.com\nd.example.com\n";
+    const char *page = "HTTP/1.1 200 OK\r\n\r\n";
+    domain_report report = {0};
+    lookup_status status;
+
+    snprintf(report.name, sizeof(report.name), "example.com");
+    record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK, "ok",
+                       names, strlen(names));
+    record_observation(&report.observations, SUBDOMAIN_PROBE_COLLECTOR, "https://a.example.com", "a.example.com",
+                       OBS_NO_RESPONSE, "not in DNS: Could not resolve host: a.example.com", NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_PROBE_COLLECTOR, "https://b.example.com", "b.example.com",
+                       OBS_NO_RESPONSE, "not in DNS: Could not resolve host: b.example.com", NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_PROBE_COLLECTOR, "https://c.example.com", "c.example.com",
+                       OBS_NO_RESPONSE, "timed out: Connection timeout after 2000 ms", NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_PROBE_COLLECTOR, "https://192.0.2.4:443", "d.example.com",
+                       OBS_OK, NULL, page, strlen(page));
+    record_observation(&report.observations, SUBDOMAIN_PROBE_COLLECTOR, "http-probe", "example.com", OBS_OK,
+                       "Probed 4 subdomains", NULL, 0);
+    record_observation(&report.observations, "asn", "whois.cymru.com:43", "192.0.2.4", OBS_OK, NULL, NULL, 0);
+    subdomain_interpret("example.com", &report.observations, &report.subdomains, &status);
+    report.subdomain_status = status;
+
+    char *text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&text, &length);
+    report_options options = {.full = 1};
+
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(text, "    not in DNS (2)          a, b\n") != NULL);
+    CHECK(strstr(text, "    timed out (1)           c\n") != NULL);
+    CHECK(strstr(text, "SOURCES") == NULL);
+    CHECK(strstr(text, "Gaps") == NULL);
+    free(text);
+
+    options.raw = 1;
+    out = open_memstream(&text, &length);
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(text, "subdomain-probe a.example.com") != NULL);
+    CHECK(strstr(text, "asn 192.0.2.4") != NULL);
+    free(text);
+
+    domain_report_free(&report);
+}
+
+/* A picked module shows its own section and nothing of the others; with
+ * --full, SOURCES lists only the sources that failed. */
+static void test_module_report(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    snprintf(report.org_domain, sizeof(report.org_domain), "example.com");
+    report.modules = MODULE_WHOIS;
+    report.whois.status = LOOKUP_OK;
+    report.whois.registered = 1;
+    snprintf(report.whois.registrar, sizeof(report.whois.registrar), "Example Registrar");
+    record_observation(&report.observations, "rdap", "rdap.example", "example.com", OBS_OK, NULL, NULL, 0);
+    record_observation(&report.observations, "rdap-bootstrap", "data.iana.org", "com", OBS_ERROR, "HTTP 503", NULL, 0);
+
+    char *text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&text, &length);
+    report_options options = {.modules = MODULE_WHOIS, .selected = 1};
+
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(text, "Modules       whois\n") != NULL);
+    CHECK(strstr(text, "passive (the targets were not contacted)") != NULL);
+    CHECK(strstr(text, "REGISTRATION") != NULL);
+    CHECK(strstr(text, "Example Registrar") != NULL);
+    CHECK(strstr(text, "DNS provider") == NULL);
+    CHECK(strstr(text, "Hosting") == NULL);
+    CHECK(strstr(text, "SUBDOMAINS") == NULL);
+    CHECK(strstr(text, "SOURCES") == NULL);
+    free(text);
+
+    options.full = 1;
+    out = open_memstream(&text, &length);
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(text, "SOURCES") == NULL);
+    /* WHOIS answered, so the failed RDAP bootstrap left nothing missing. */
+    CHECK(strstr(text, "Gaps") == NULL);
+    free(text);
+
+    options.raw = 1;
+    out = open_memstream(&text, &length);
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(text, "error        rdap-bootstrap com") != NULL);
+    CHECK(strstr(text, "ok           rdap example.com") != NULL);
+    free(text);
+
+    domain_report_free(&report);
+}
+
+/* Failed third-party sources are named in the SUMMARY of every mode,
+ * with what they leave missing. */
+static void test_gaps(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.whois.status = LOOKUP_FAILED;
+    report.subdomain_status = LOOKUP_OK;
+    record_observation(&report.observations, "rdap", "rdap.example", "example.com", OBS_NO_RESPONSE,
+                       "Operation timed out after 15000 milliseconds", NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "crt.sh", "example.com", OBS_ERROR, "HTTP 502",
+                       NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "otx.alienvault.com", "example.com", OBS_LIMITED,
+                       "HTTP 429", NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK,
+                       "3 subdomains", NULL, 0);
+    record_observation(&report.observations, "http", "192.0.2.1:80", "example.com", OBS_NO_RESPONSE,
+                       "no answer on port 80", NULL, 0);
+
+    char *text = render(&report);
+    CHECK(strstr(text, "  Gaps          registration: rdap.example (no response)\n") != NULL);
+    CHECK(strstr(text, "                subdomains: crt.sh (HTTP 502), otx.alienvault.com (HTTP 429);\n"
+                       "                the list may be incomplete\n") != NULL);
+    CHECK(strstr(text, "port 80") == NULL);
+    free(text);
+
+    domain_report_free(&report);
+}
+
+/* An address query for iam.example.com answered NXDOMAIN with the alias
+ * to a deleted Azure app: the shape of a takeover candidate. */
+static const unsigned char dangling_packet[] = {
+    0x00, 0x01, 0x81, 0x83, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    3, 'i', 'a', 'm', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x00, 0x01, 0x00, 0x01,
+    0xc0, 0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x15,
+    1, 'x', 13, 'a', 'z', 'u', 'r', 'e', 'w', 'e', 'b', 's', 'i', 't', 'e', 's', 3, 'n', 'e', 't', 0,
+};
+
+static int has_signal(const domain_report *report, severity level, const char *text)
+{
+    const finding *signal = find_signal(report, text);
+    return signal != NULL && signal->level == level;
+}
+
+/* Aliases, CDN edges, certificate names and CT dates turn into signals. */
+static void test_infrastructure_signals(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    snprintf(report.org_domain, sizeof(report.org_domain), "example.com");
+    report.subdomain_status = LOOKUP_OK;
+
+    subdomain_list_add(&report.subdomains, "iam.example.com");
+    record_observation(&report.observations, DNS_COLLECTOR, "192.0.2.53:53", "A iam.example.com", OBS_OK,
+                       "NXDOMAIN: the alias target does not exist", dangling_packet, sizeof(dangling_packet));
+    dns_interpret_cnames(&report.observations, &report.subdomains);
+    CHECK_STR(report.subdomains.items[0].cname, "x.azurewebsites.net");
+    CHECK_INT(report.subdomains.items[0].cname_dangling, 1);
+
+    /* A CDN refusing a host it has no site for is not "online". */
+    add_live(&report, "old.example.com", 400, "192.0.2.30", "20940", "AKAMAI-ASN1 - Akamai Technologies, US");
+    add_live(&report, "shop.example.com", 200, "192.0.2.30", "20940", "AKAMAI-ASN1 - Akamai Technologies, US");
+
+    string_list_add(&report.tls.names, "example.com");
+    string_list_add(&report.tls.names, "*.example.com");
+    string_list_add(&report.tls.names, "www.sister-brand.example");
+    report.tls.status = LOOKUP_OK;
+
+    time_t recent = time(NULL) - 5 * 86400;
+    strftime(report.ct_first_seen, sizeof(report.ct_first_seen), "%Y-%m-%d", gmtime(&recent));
+
+    analyze_domain(&report);
+
+    CHECK(has_signal(&report, SEVERITY_HIGH, "Subdomain takeover risk: 1 alias points to a deleted resource"));
+    CHECK(find_signal(&report, "iam -> x.azurewebsites.net") != NULL);
+    CHECK(has_signal(&report, SEVERITY_LOW, "1 subdomain still points to Akamai"));
+    CHECK(find_signal(&report, "removing: old.") != NULL);
+    CHECK_INT(report.subdomains.items[1].edge_only, 1);
+    CHECK_INT(report.subdomains.items[2].edge_only, 0);
+    CHECK(has_signal(&report, SEVERITY_INFO, "also covers 1 other domain"));
+    CHECK(find_signal(&report, "sister-brand.example") != NULL);
+    CHECK(has_signal(&report, SEVERITY_MEDIUM, "The first certificate for this domain was logged"));
+
+    char *text = render(&report);
+    CHECK(strstr(text, "1 online, 1 only reach a CDN (3 discovered)") != NULL);
+    CHECK(strstr(text, "Only a CDN answers, no site configured (1):") != NULL);
+    CHECK(strstr(text, "    iam  -> x.azurewebsites.net  (target does not exist)\n") != NULL);
+    free(text);
+
+    domain_report_free(&report);
+}
+
+/* Threat-intelligence answers, as the APIs send them. */
+static void test_reputation_parsers(void)
+{
+    reputation_info info = {0};
+    const char *otx = "{\"pulse_info\":{\"count\":2,\"pulses\":[{\"name\":\"Phishing kit\"},{\"name\":\"C2\"}]},"
+                      "\"validation\":[]}";
+    const char *urlhaus = "{\"query_status\":\"ok\",\"url_count\":\"3\",\"blacklists\":{\"spamhaus_dbl\":"
+                          "\"abused_legit_malware\",\"surbl\":\"not listed\"},\"urls\":[{\"url_status\":\"online\","
+                          "\"threat\":\"malware_download\"},{\"url_status\":\"offline\",\"threat\":\"malware_download\"}]}";
+    const char *threatfox = "{\"query_status\":\"ok\",\"data\":[{\"malware_printable\":\"Cobalt Strike\"}]}";
+
+    CHECK_INT(reputation_parse_otx(otx, strlen(otx), &info), 0);
+    CHECK_INT(info.otx_pulses, 2);
+    CHECK(string_list_contains(&info.otx_pulse_names, "Phishing kit"));
+    CHECK_INT(info.otx_allowlisted, 0);
+
+    CHECK_INT(reputation_parse_urlhaus(urlhaus, strlen(urlhaus), &info), 0);
+    CHECK_INT(info.urlhaus_urls, 3);
+    CHECK_INT(info.urlhaus_online, 1);
+    CHECK_STR(info.spamhaus_dbl, "abused_legit_malware");
+
+    CHECK_INT(reputation_parse_threatfox(threatfox, strlen(threatfox), &info), 0);
+    CHECK_INT(info.threatfox_iocs, 1);
+
+    const char *no_urls = "{\"query_status\":\"no_results\"}";
+    const char *no_iocs = "{\"query_status\":\"no_result\"}";
+    CHECK_INT(reputation_parse_urlhaus(no_urls, strlen(no_urls), &info), 0);
+    CHECK_INT(reputation_parse_threatfox(no_iocs, strlen(no_iocs), &info), 0);
+    CHECK_INT(reputation_parse_otx("[]", 2, &info), -1);
+
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "bad.example");
+    report.modules = MODULE_REPUTATION;
+    report.reputation = info;
+    report.reputation.otx_status = LOOKUP_OK;
+    report.reputation.urlhaus_status = LOOKUP_OK;
+    report.reputation.threatfox_status = LOOKUP_OK;
+    analyze_domain(&report);
+
+    CHECK(has_signal(&report, SEVERITY_HIGH, "ThreatFox lists this domain as an indicator of compromise (1 entry: "
+                                             "Cobalt Strike)"));
+    CHECK(has_signal(&report, SEVERITY_HIGH, "URLhaus has 3 malware URLs on this host, 1 still online"));
+    CHECK(has_signal(&report, SEVERITY_HIGH, "Spamhaus DBL"));
+    CHECK(has_signal(&report, SEVERITY_LOW, "Referenced in 2 AlienVault OTX pulses"));
+
+    char *text = render(&report);
+    CHECK(strstr(text, "Reputation    listed: ThreatFox (1 IOC); URLhaus (3 URLs, 1 online);") != NULL);
+    CHECK(strstr(text, "REPUTATION") == NULL);
+    free(text);
+
+    domain_report_free(&report);
+}
+
+/* The JSON output parses with the strict reader, whatever the sources sent. */
+static void test_json_output(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.modules = MODULE_WHOIS | MODULE_SUBDOMAINS;
+    report.whois.status = LOOKUP_OK;
+    report.whois.registered = 1;
+    snprintf(report.whois.registrant, sizeof(report.whois.registrant), "Caf\xe9 \"Quoted\"\tName\x01");
+    report.subdomain_status = LOOKUP_OK;
+    add_live(&report, "www.example.com", 200, "192.0.2.10", "64500", "EXAMPLE-AS");
+    subdomain_list_add(&report.subdomains, "old.example.com");
+    snprintf(report.subdomains.items[1].cname, DOMAIN_SIZE, "gone.azurewebsites.net");
+    report.subdomains.items[1].cname_dangling = 1;
+    analyze_domain(&report);
+
+    char *text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&text, &length);
+    report_options options = {.modules = MODULE_WHOIS | MODULE_SUBDOMAINS, .selected = 1};
+
+    print_report_json(out, &report, 1, NULL, &options);
+    fclose(out);
+
+    json_value *doc = json_parse(text, length);
+    CHECK(doc != NULL);
+
+    const json_value *domain = json_at(json_get_array(doc, "domains"), 0);
+    const json_value *registration = json_get_object(domain, "registration");
+    const json_value *items = json_get_array(json_get_object(domain, "subdomains"), "items");
+    const json_value *indicators = json_get_object(domain, "indicators");
+
+    CHECK_STR(json_get_string(registration, "registrant"), "Caf\xc3\xa9 \"Quoted\"\tName\x01");
+    CHECK_STR(json_get_string(json_at(items, 0), "state"), "online");
+    CHECK_STR(json_get_string(json_at(items, 1), "cname"), "gone.azurewebsites.net");
+    CHECK_INT(json_count(json_get_array(indicators, "domains")), 2);
+    CHECK_STR(json_string(json_at(json_get_array(indicators, "ips"), 0)), "192.0.2.10");
+    CHECK(json_get(domain, "dns") == NULL);
+    CHECK_STR(json_get_string(json_at(json_get_array(domain, "signals"), 0), "severity"), "high");
+
+    json_free(doc);
+    free(text);
     domain_report_free(&report);
 }
 
@@ -464,8 +760,8 @@ void test_subdomains(void)
      * - directory listing (HIGH)
      * - dev.example.com open (MEDIUM)
      * - admin.example.com restricted (LOW)
-     * - liveness summary (INFO) */
-    CHECK(report.finding_count >= 4);
+     */
+    CHECK(report.finding_count >= 3);
 
     int found_high = 0;
     int found_medium = 0;
@@ -499,7 +795,8 @@ void test_subdomains(void)
     CHECK(found_high);
     CHECK(found_medium);
     CHECK(found_low);
-    CHECK(found_liveness);
+    /* The counts live in the SUMMARY; repeating them as a signal was noise. */
+    CHECK(!found_liveness);
 
     observation_list_free(&obs);
     domain_report_free(&report);
@@ -512,4 +809,10 @@ void test_subdomains(void)
     test_probe_interpretation();
     test_sensitive_over_probe_limit();
     test_concise_subdomain_list();
+    test_probe_report_grouping();
+    test_module_report();
+    test_gaps();
+    test_infrastructure_signals();
+    test_reputation_parsers();
+    test_json_output();
 }

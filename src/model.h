@@ -40,7 +40,19 @@ typedef struct
     char server[FIELD_SIZE];/* Server banner header */
     char title[FIELD_SIZE]; /* HTML <title> tag content */
     char error[FIELD_SIZE];/* Error message if unreachable */
+    char cname[DOMAIN_SIZE];  /* alias target, from a CNAME lookup */
+    int cname_dangling;       /* the alias target does not exist (NXDOMAIN) */
+    int edge_only;            /* a CDN answers for the name but serves no site for it */
 } subdomain_info;
+
+/* How a subdomain ended up, for the report and the JSON output. */
+typedef enum
+{
+    SUBDOMAIN_NOT_PROBED,
+    SUBDOMAIN_NO_ANSWER,
+    SUBDOMAIN_EDGE_ONLY,
+    SUBDOMAIN_ONLINE
+} subdomain_state;
 
 typedef struct
 {
@@ -134,7 +146,30 @@ typedef struct
     char valid_until[64];
     char signature[FIELD_SIZE];
     char serial[FIELD_SIZE];
+    string_list names; /* subject alternative names (DNS entries) */
 } tls_info;
+
+/* What threat-intelligence sources know about the domain. */
+typedef struct
+{
+    lookup_status otx_status;
+    long otx_pulses;
+    string_list otx_pulse_names;
+    int otx_allowlisted;
+
+    lookup_status urlhaus_status;
+    int urlhaus_not_queried;
+    long urlhaus_urls;
+    long urlhaus_online;
+    char spamhaus_dbl[64];
+    char surbl[64];
+    string_list urlhaus_threats;
+
+    lookup_status threatfox_status;
+    int threatfox_not_queried;
+    long threatfox_iocs;
+    string_list threatfox_malware;
+} reputation_info;
 
 /* What happened when a source was asked. These are deliberately distinct:
  * "the source said there is nothing" is not "the source did not answer". */
@@ -182,10 +217,23 @@ typedef struct
     char text[512];
 } finding;
 
+/* The lookups a report is made of, chosen with -a, -d, -w, -t, -H, -s. */
+#define MODULE_ADDRESSES 0x01u
+#define MODULE_DNS 0x02u
+#define MODULE_WHOIS 0x04u
+#define MODULE_TLS 0x08u
+#define MODULE_HTTP 0x10u
+#define MODULE_SUBDOMAINS 0x20u
+#define MODULE_REPUTATION 0x40u
+#define MODULE_ALL 0x7fu
+
 typedef struct
 {
     char name[DOMAIN_SIZE];
     char org_domain[DOMAIN_SIZE];
+
+    /* MODULE_* bits of the lookups to run and report; 0 means all. */
+    unsigned modules;
 
     lookup_status resolve_status;
     char resolve_error[FIELD_SIZE * 2];
@@ -196,6 +244,7 @@ typedef struct
     tls_info tls;
     dns_info dns;
     whois_info whois;
+    reputation_info reputation;
 
     /* Every query made for this domain, in order, with its raw answer. */
     observation_list observations;
@@ -212,9 +261,30 @@ typedef struct
     /* Discovered subdomains from passive OSINT and liveness status. */
     lookup_status subdomain_status;
     subdomain_list subdomains;
+    char ct_first_seen[32]; /* earliest certificate logged for the domain */
 
     double elapsed_seconds;
 } domain_report;
+
+static inline int report_has(const domain_report *report, unsigned module)
+{
+    return report->modules == 0 || (report->modules & module) != 0;
+}
+
+static inline subdomain_state subdomain_state_of(const subdomain_info *sub)
+{
+    if (!sub->probed)
+    {
+        return SUBDOMAIN_NOT_PROBED;
+    }
+
+    if (!sub->is_live)
+    {
+        return SUBDOMAIN_NO_ANSWER;
+    }
+
+    return sub->edge_only ? SUBDOMAIN_EDGE_ONLY : SUBDOMAIN_ONLINE;
+}
 
 void string_list_add(string_list *list, const char *value);
 void string_list_add_unique(string_list *list, const char *value);
