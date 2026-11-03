@@ -9,6 +9,7 @@
 #include "dns.h"
 #include "model.h"
 #include "http.h"
+#include "subdomain.h"
 #include "tls.h"
 #include "util.h"
 
@@ -20,6 +21,8 @@
 #define REPORT_WIDTH 80
 #define TAG_WIDTH 9
 #define SOURCE_INDENT 15
+/* Names listed per group of unanswered subdomains without --full. */
+#define CONCISE_SUBDOMAINS 20
 
 static void describe_certificate(const tls_info *tls, char *out, size_t size);
 
@@ -332,6 +335,10 @@ static void print_summary(FILE *out, const domain_report *report)
     if (report->subdomain_status == LOOKUP_SKIPPED)
     {
         print_field(out, "Subdomains", "skipped (--no-subdomains)");
+    }
+    else if (report->subdomain_status == LOOKUP_FAILED)
+    {
+        print_field(out, "Subdomains", "lookup failed (no passive OSINT source answered)");
     }
     else if (report->subdomains.count == 0)
     {
@@ -746,7 +753,10 @@ static void print_sources(FILE *out, const domain_report *report)
     for (size_t i = 0; i < report->observations.count; i++)
     {
         const observation *item = &report->observations.items[i];
-        int reached_target = (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0) &&
+        /* Subdomain probes name the URL they requested; the probe summary does not. */
+        int probe = strcmp(item->collector, SUBDOMAIN_PROBE_COLLECTOR) == 0 && strstr(item->source, "://") != NULL;
+        int reached_target = (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0 ||
+                              probe) &&
                              item->status != OBS_NOT_QUERIED;
 
         snprintf(asked, sizeof(asked), "%s %s", item->collector, item->query);
@@ -774,9 +784,12 @@ static void print_raw(FILE *out, const domain_report *report)
 }
 
 /* Lists the subdomains that were probed without answer (probed = 1) or
- * that were never probed (probed = 0). */
-static void print_unanswered(FILE *out, const domain_report *report, int probed)
+ * that were never probed (probed = 0), at most `limit` of them (0: all). */
+static void print_unanswered(FILE *out, const domain_report *report, int probed, size_t limit)
 {
+    size_t shown = 0;
+    size_t hidden = 0;
+
     for (size_t i = 0; i < report->subdomains.count; i++)
     {
         const subdomain_info *sub = &report->subdomains.items[i];
@@ -786,6 +799,14 @@ static void print_unanswered(FILE *out, const domain_report *report, int probed)
             continue;
         }
 
+        if (limit > 0 && shown == limit)
+        {
+            hidden++;
+            continue;
+        }
+
+        shown++;
+
         if (sub->ip[0] != '\0')
         {
             fprintf(out, "    %s (%s)\n", sub->name, sub->ip);
@@ -794,6 +815,11 @@ static void print_unanswered(FILE *out, const domain_report *report, int probed)
         {
             fprintf(out, "    %s\n", sub->name);
         }
+    }
+
+    if (hidden > 0)
+    {
+        fprintf(out, "    ... and %zu more (--full lists them all)\n", hidden);
     }
 }
 
@@ -909,13 +935,21 @@ static void print_shared_addresses(FILE *out, const domain_report *report)
     }
 }
 
-static void print_subdomains(FILE *out, const domain_report *report)
+static void print_subdomains(FILE *out, const domain_report *report, int full)
 {
+    size_t limit = full ? 0 : CONCISE_SUBDOMAINS;
+
     print_section(out, "SUBDOMAINS");
 
     if (report->subdomain_status == LOOKUP_SKIPPED)
     {
         fprintf(out, "  Skipped (--no-subdomains).\n");
+        return;
+    }
+
+    if (report->subdomain_status == LOOKUP_FAILED)
+    {
+        fprintf(out, "  Lookup failed: no passive OSINT source answered.\n");
         return;
     }
 
@@ -947,7 +981,7 @@ static void print_subdomains(FILE *out, const domain_report *report)
     {
         fprintf(out, "  Discovered %zu subdomain%s via passive sources (CT logs / OSINT, not probed):\n\n",
                 report->subdomains.count, report->subdomains.count == 1 ? "" : "s");
-        print_unanswered(out, report, 0);
+        print_unanswered(out, report, 0, limit);
         return;
     }
 
@@ -1007,13 +1041,13 @@ static void print_subdomains(FILE *out, const domain_report *report)
     if (silent > 0)
     {
         fprintf(out, "\n  No HTTP/HTTPS response (%zu):\n\n", silent);
-        print_unanswered(out, report, 1);
+        print_unanswered(out, report, 1, limit);
     }
 
     if (skipped > 0)
     {
         fprintf(out, "\n  Not probed, over the probe limit (%zu):\n\n", skipped);
-        print_unanswered(out, report, 0);
+        print_unanswered(out, report, 0, limit);
     }
 }
 
@@ -1039,7 +1073,7 @@ static void print_domain(FILE *out, const domain_report *report, const report_op
         }
     }
 
-    print_subdomains(out, report);
+    print_subdomains(out, report, options->full);
 }
 
 static const char *strength_title(link_strength strength)
@@ -1125,7 +1159,9 @@ static void print_correlation(FILE *out, const domain_report *reports, size_t co
     free(names);
 }
 
-static void print_all_subdomains(FILE *out, const domain_report *reports, size_t count)
+/* Without --full only the totals per target; each domain's section
+ * already lists its subdomains. */
+static void print_all_subdomains(FILE *out, const domain_report *reports, size_t count, int full)
 {
     size_t total = 0;
 
@@ -1141,6 +1177,23 @@ static void print_all_subdomains(FILE *out, const domain_report *reports, size_t
 
     print_section(out, "SUBDOMAIN INVESTIGATION SUMMARY");
     fprintf(out, "  Total subdomains discovered across %zu targets: %zu\n\n", count, total);
+
+    if (!full)
+    {
+        for (size_t i = 0; i < count; i++)
+        {
+            size_t live = 0;
+
+            for (size_t j = 0; j < reports[i].subdomains.count; j++)
+            {
+                live += reports[i].subdomains.items[j].is_live;
+            }
+
+            fprintf(out, "  %-40s %zu discovered, %zu online\n", reports[i].name, reports[i].subdomains.count, live);
+        }
+
+        return;
+    }
 
     for (size_t i = 0; i < count; i++)
     {
@@ -1191,6 +1244,6 @@ void print_report(FILE *out, const domain_report *reports, size_t count, const c
     if (count > 1)
     {
         print_correlation(out, reports, count, links);
-        print_all_subdomains(out, reports, count);
+        print_all_subdomains(out, reports, count, options->full);
     }
 }

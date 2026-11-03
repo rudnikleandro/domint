@@ -226,6 +226,8 @@ void subdomain_list_add(subdomain_list *list, const char *name);
 void subdomain_list_add_unique(subdomain_list *list, const char *name);
 int subdomain_list_contains(const subdomain_list *list, const char *name);
 void subdomain_list_sort(subdomain_list *list);
+/* Sorts and drops repeated names (case-insensitive), keeping the first. */
+void subdomain_list_dedupe(subdomain_list *list);
 void subdomain_list_free(subdomain_list *list);
 
 /* Appends an observation stamped with the current UTC time; `content`

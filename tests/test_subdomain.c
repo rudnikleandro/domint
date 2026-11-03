@@ -82,6 +82,237 @@ static void test_subdomain_infrastructure(void)
     domain_report_free(&report);
 }
 
+static char *render(const domain_report *report)
+{
+    char *text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&text, &length);
+    report_options options = {0};
+
+    print_report(out, report, 1, NULL, &options);
+    fclose(out);
+    return text;
+}
+
+/* The non-production list stops before it would leave no room for ", ...". */
+static void test_non_production_list_limit(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.subdomain_status = LOOKUP_OK;
+
+    /* 43 + 8 x (2 + 40) = 379 characters: the last name fits exactly
+     * without the marker, so it must be left out. */
+    char name[DOMAIN_SIZE];
+    snprintf(name, sizeof(name), "dev-%027d.example.com", 0);
+    subdomain_list_add(&report.subdomains, name);
+
+    for (int i = 1; i <= 9; i++)
+    {
+        snprintf(name, sizeof(name), "dev-%024d.example.com", i);
+        subdomain_list_add(&report.subdomains, name);
+    }
+
+    analyze_domain(&report);
+
+    const finding *signal = find_signal(&report, "non-production");
+    CHECK(signal != NULL);
+
+    if (signal != NULL)
+    {
+        CHECK(strstr(signal->text, "10 non-production") != NULL);
+        CHECK(strstr(signal->text, "dev-000000000000000000000007.example.com, ...") != NULL);
+        CHECK(strstr(signal->text, "dev-000000000000000000000008.example.com") == NULL);
+    }
+
+    domain_report_free(&report);
+}
+
+/* Keywords are looked for only in front of the investigated domain. */
+static void test_sensitive_keyword_in_domain(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "portalcorp.example");
+    report.subdomain_status = LOOKUP_OK;
+
+    add_live(&report, "www.portalcorp.example", 200, "192.0.2.10", "", "");
+    add_live(&report, "vpn.portalcorp.example", 200, "192.0.2.11", "", "");
+
+    analyze_domain(&report);
+
+    CHECK(find_signal(&report, "www.portalcorp.example") == NULL);
+    CHECK(find_signal(&report, "accessible without restriction: vpn.portalcorp.example") != NULL);
+    domain_report_free(&report);
+}
+
+/* A full findings list makes room for a more severe signal found late. */
+static void test_findings_limit_keeps_severe(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.subdomain_status = LOOKUP_OK;
+
+    char name[DOMAIN_SIZE];
+
+    for (int i = 0; i < MAX_FINDINGS + 8; i++)
+    {
+        snprintf(name, sizeof(name), "admin%02d.example.com", i);
+        add_live(&report, name, 403, "192.0.2.10", "", "");
+    }
+
+    add_live(&report, "zz.example.com", 200, "192.0.2.20", "", "");
+    snprintf(report.subdomains.items[report.subdomains.count - 1].title, FIELD_SIZE, "Index of /");
+
+    analyze_domain(&report);
+
+    CHECK_INT(report.finding_count, MAX_FINDINGS);
+    CHECK_INT(report.findings[0].level, SEVERITY_HIGH);
+    CHECK(strstr(report.findings[0].text, "zz.example.com") != NULL);
+    domain_report_free(&report);
+}
+
+/* Every OSINT source failing is reported as a failure, not as no subdomains. */
+static void test_subdomain_lookup_failed(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.subdomain_status = LOOKUP_FAILED;
+
+    char *text = render(&report);
+
+    CHECK(strstr(text, "lookup failed (no passive OSINT source answered)") != NULL);
+    CHECK(strstr(text, "Lookup failed: no passive OSINT source answered.") != NULL);
+    CHECK(strstr(text, "none found") == NULL);
+    CHECK(strstr(text, "None found") == NULL);
+
+    free(text);
+    domain_report_free(&report);
+}
+
+/* Probe results come from the recorded attempts alone: the first answer
+ * wins and nothing from a failed HTTPS attempt leaks into it. */
+static void test_probe_interpretation(void)
+{
+    const char *names = "api.example.com\nold.example.com\nwww.example.com\n";
+    const char *redirect = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 301 Moved Permanently\r\n"
+                           "Location: https://www.example.com/\r\n\r\n";
+    const char *page = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><title> Plain \n page </title>";
+    observation_list obs = {0};
+    subdomain_list list = {0};
+    lookup_status status;
+
+    record_observation(&obs, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK, "ok", names,
+                       strlen(names));
+    record_observation(&obs, SUBDOMAIN_PROBE_COLLECTOR, "https://192.0.2.1:443", "api.example.com", OBS_OK, NULL,
+                       redirect, strlen(redirect));
+    record_observation(&obs, SUBDOMAIN_PROBE_COLLECTOR, "https://[2001:db8::2]:443", "www.example.com", OBS_NO_RESPONSE,
+                       "Operation timed out", NULL, 0);
+    record_observation(&obs, SUBDOMAIN_PROBE_COLLECTOR, "http://192.0.2.3:80", "www.example.com", OBS_OK, NULL, page,
+                       strlen(page));
+    record_observation(&obs, SUBDOMAIN_PROBE_COLLECTOR, "https://old.example.com", "old.example.com", OBS_NO_RESPONSE,
+                       "Could not resolve host", NULL, 0);
+    record_observation(&obs, SUBDOMAIN_PROBE_COLLECTOR, "http-probe", "example.com", OBS_OK, "Probed 3", NULL, 0);
+
+    /* Twice: interpreting again gives the same list. */
+    for (int round = 0; round < 2; round++)
+    {
+        subdomain_interpret("example.com", &obs, &list, &status);
+
+        CHECK_INT(status, LOOKUP_OK);
+        CHECK_INT(list.count, 3);
+
+        const subdomain_info *api = &list.items[0];
+        CHECK_STR(api->name, "api.example.com");
+        CHECK(api->probed && api->is_live);
+        CHECK_INT(api->http_code, 301);
+        CHECK_STR(api->protocol, "https");
+        CHECK_STR(api->ip, "192.0.2.1");
+        CHECK_STR(api->location, "https://www.example.com/");
+
+        const subdomain_info *old = &list.items[1];
+        CHECK(old->probed && !old->is_live);
+        CHECK_STR(old->ip, "");
+        CHECK_STR(old->error, "Could not resolve host");
+
+        const subdomain_info *www = &list.items[2];
+        CHECK(www->probed && www->is_live);
+        CHECK_INT(www->http_code, 200);
+        CHECK_STR(www->protocol, "http");
+        CHECK_STR(www->ip, "192.0.2.3");
+        CHECK_STR(www->error, "");
+        CHECK_STR(www->server, "");
+        CHECK_STR(www->title, "Plain page");
+    }
+
+    subdomain_list_free(&list);
+    observation_list_free(&obs);
+}
+
+/* Sensitive names past the probe limit are still reported. */
+static void test_sensitive_over_probe_limit(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.subdomain_status = LOOKUP_OK;
+
+    char name[DOMAIN_SIZE];
+
+    for (int i = 0; i < 50; i++)
+    {
+        snprintf(name, sizeof(name), "host%02d.example.com", i);
+        add_live(&report, name, 0, "", "", "");
+    }
+
+    subdomain_list_add(&report.subdomains, "vpn.example.com");
+    analyze_domain(&report);
+
+    const finding *signal = find_signal(&report, "over the probe limit");
+    CHECK(signal != NULL);
+
+    if (signal != NULL)
+    {
+        CHECK_INT(signal->level, SEVERITY_LOW);
+        CHECK(strstr(signal->text, "vpn.example.com") != NULL);
+    }
+
+    domain_report_free(&report);
+}
+
+/* The concise report lists only the first unanswered names; --full all. */
+static void test_concise_subdomain_list(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.subdomain_status = LOOKUP_OK;
+
+    char name[DOMAIN_SIZE];
+
+    for (int i = 0; i < 30; i++)
+    {
+        snprintf(name, sizeof(name), "host%02d.example.com", i);
+        subdomain_list_add(&report.subdomains, name);
+    }
+
+    char *text = render(&report);
+    CHECK(strstr(text, "    host19.example.com\n") != NULL);
+    CHECK(strstr(text, "host20.example.com") == NULL);
+    CHECK(strstr(text, "... and 10 more (--full lists them all)") != NULL);
+    free(text);
+
+    char *full_text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&full_text, &length);
+    report_options options = {0, 1, 0};
+
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(full_text, "    host29.example.com\n") != NULL);
+    CHECK(strstr(full_text, "more (--full") == NULL);
+    free(full_text);
+
+    domain_report_free(&report);
+}
+
 void test_subdomains(void)
 {
     subdomain_list list = {0};
@@ -274,4 +505,11 @@ void test_subdomains(void)
     domain_report_free(&report);
 
     test_subdomain_infrastructure();
+    test_non_production_list_limit();
+    test_sensitive_keyword_in_domain();
+    test_findings_limit_keeps_severe();
+    test_subdomain_lookup_failed();
+    test_probe_interpretation();
+    test_sensitive_over_probe_limit();
+    test_concise_subdomain_list();
 }

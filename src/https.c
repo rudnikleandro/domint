@@ -65,6 +65,11 @@ static int is_no_response(CURLcode code)
 
 https_response https_get(const char *url, size_t max_size)
 {
+    return https_get_timeout(url, max_size, TOTAL_TIMEOUT_SECONDS);
+}
+
+https_response https_get_timeout(const char *url, size_t max_size, long timeout_seconds)
+{
     https_response response;
     body buffer = {NULL, 0, max_size, 0};
     char error_buffer[CURL_ERROR_SIZE] = "";
@@ -95,7 +100,7 @@ https_response https_get(const char *url, size_t max_size)
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, CONNECT_TIMEOUT_SECONDS);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, TOTAL_TIMEOUT_SECONDS);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, HTTP_USER_AGENT);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, collect_body);

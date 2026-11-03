@@ -115,6 +115,28 @@ void subdomain_list_sort(subdomain_list *list)
     }
 }
 
+void subdomain_list_dedupe(subdomain_list *list)
+{
+    subdomain_list_sort(list);
+
+    size_t kept = 0;
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        if (kept == 0 || strcasecmp(list->items[kept - 1].name, list->items[i].name) != 0)
+        {
+            if (kept != i)
+            {
+                list->items[kept] = list->items[i];
+            }
+
+            kept++;
+        }
+    }
+
+    list->count = kept;
+}
+
 void subdomain_list_free(subdomain_list *list)
 {
     free(list->items);

@@ -10,16 +10,19 @@
 
 /* Queries passive OSINT sources (Certificate Transparency logs on crt.sh,
  * AlienVault OTX passive DNS, and HackerTarget host search) for subdomains
- * without sending traffic to the target domain or its authoritative servers. */
-void subdomain_collect(const char *domain, observation_list *observations);
+ * without sending traffic to the target domain or its authoritative servers.
+ * The names found are added to `found` (sorted, no repeats) for probing. */
+void subdomain_collect(const char *domain, observation_list *observations, subdomain_list *found);
 
-/* Extracts, deduplicates, and sorts valid subdomains of `domain` from observations. */
+/* Rebuilds `subdomains` from the observations alone: the valid subdomains
+ * of `domain`, sorted and deduplicated, with the recorded probe results. */
 void subdomain_interpret(const char *domain, const observation_list *observations,
                          subdomain_list *subdomains, lookup_status *status);
 
-/* Probes discovered subdomains over HTTPS/HTTP to determine liveness, status codes
- * (200 OK, 403 Forbidden, 301/302 Redirect, etc.), IP address, and server banner.
- * Skips probing if passive mode or no_probe is set. */
+/* Probes the first subdomains over HTTPS, then HTTP for those that did not
+ * answer, several at a time. Each attempt is recorded as an observation and
+ * its result (status code, IP address, Server, Location, title) filled into
+ * `subdomains`. Skips probing if passive mode or no_probe is set. */
 void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
                      observation_list *observations, const char *domain);
 

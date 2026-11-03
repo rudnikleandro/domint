@@ -11,6 +11,7 @@
 #include "https.h"
 #include "model.h"
 #include "pipeline.h"
+#include "progress.h"
 #include "report.h"
 #include "util.h"
 
@@ -245,13 +246,13 @@ int main(int argc, char *argv[])
         struct timespec start;
 
         snprintf(report->name, sizeof(report->name), "%s", domains.items[i]);
-        fprintf(stderr, "[%zu/%zu] %s ... ", i + 1, domains.count, report->name);
+        progress_begin(i + 1, domains.count, report->name);
 
         clock_gettime(CLOCK_MONOTONIC, &start);
         collect_domain(report, opts.passive, opts.no_subdomains, opts.no_probe, custom_resolver);
         interpret_domain(report);
 
-        fprintf(stderr, "done (%.1fs)\n", seconds_since(&start));
+        progress_end(seconds_since(&start));
     }
 
     correlation links = {0};

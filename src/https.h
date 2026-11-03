@@ -24,6 +24,10 @@ void https_cleanup(void);
  * empty (404), limited (429 or too large), no_response, or error. */
 https_response https_get(const char *url, size_t max_size);
 
+/* https_get() with a total time limit other than the default 15 seconds,
+ * for sources that send large answers slowly. */
+https_response https_get_timeout(const char *url, size_t max_size, long timeout_seconds);
+
 /* The host part of an https:// URL, for reporting the source. */
 void url_host(const char *url, char *out, size_t size);
 

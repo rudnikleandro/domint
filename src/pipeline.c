@@ -6,6 +6,7 @@
 #include "domain.h"
 #include "model.h"
 #include "http.h"
+#include "progress.h"
 #include "rdap.h"
 #include "resolve.h"
 #include "subdomain.h"
@@ -19,13 +20,18 @@ void collect_domain(domain_report *report, int passive, int no_subdomains, int n
     organizational_domain(report->name, report->org_domain, sizeof(report->org_domain));
 
     /* The addresses decide which ASN and HTTP lookups follow. */
+    progress_step("resolving addresses");
     resolve_collect(report->name, observations);
     resolve_interpret(observations, report);
+
+    progress_step("network lookup (ASN)");
 
     for (size_t i = 0; i < report->address_count; i++)
     {
         asn_collect(report->addresses[i].ip, observations);
     }
+
+    progress_step(passive ? "HTTP and TLS skipped (--passive)" : "HTTP and TLS");
 
     if (passive)
     {
@@ -40,9 +46,12 @@ void collect_domain(domain_report *report, int passive, int no_subdomains, int n
         tls_collect(report->name, report->addresses, report->address_count, observations);
     }
 
+    progress_step("DNS records");
     dns_collect(report->name, report->org_domain, custom_resolver, observations);
 
     /* RDAP gives structured data; WHOIS covers registries without it. */
+    progress_step("registration (RDAP/WHOIS)");
+
     if (!rdap_collect(report->org_domain, observations))
     {
         whois_collect(report->org_domain, observations);
@@ -55,10 +64,16 @@ void collect_domain(domain_report *report, int passive, int no_subdomains, int n
     }
     else
     {
-        subdomain_collect(report->name, observations);
-        subdomain_interpret(report->name, observations, &report->subdomains, &report->subdomain_status);
-        subdomain_probe(&report->subdomains, passive, no_probe, observations, report->name);
-        asn_collect_subdomains(&report->subdomains, observations);
+        /* A working list for the probes and ASN lookups; the report's own
+         * list is rebuilt from the observations in interpret_domain(). */
+        subdomain_list found = {0};
+
+        subdomain_collect(report->name, observations, &found);
+        progress_step("probing subdomains");
+        subdomain_probe(&found, passive, no_probe, observations, report->name);
+        progress_step("subdomain networks (ASN)");
+        asn_collect_subdomains(&found, observations);
+        subdomain_list_free(&found);
     }
 }
 

@@ -3,8 +3,8 @@
 #
 # -MMD -MP write a .d file per object listing the headers it includes, so
 # editing a header rebuilds every .c that depends on it.
-CFLAGS = -O2 -Wall -Wextra -Werror -MMD -MP
-LDLIBS = -lresolv -lcurl
+CFLAGS = -O2 -Wall -Wextra -Werror -MMD -MP -pthread
+LDLIBS = -lresolv -lcurl -pthread
 
 TARGET = domint
 SRC_DIR = src

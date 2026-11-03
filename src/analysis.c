@@ -306,7 +306,26 @@ static void add_finding(domain_report *report, severity level, const char *forma
 {
     if (report->finding_count == MAX_FINDINGS)
     {
-        return;
+        /* Full: drop the latest of the least severe findings to make room,
+         * so a late HIGH signal is not lost to earlier INFO entries. */
+        size_t weakest = 0;
+
+        for (size_t i = 1; i < report->finding_count; i++)
+        {
+            if (report->findings[i].level <= report->findings[weakest].level)
+            {
+                weakest = i;
+            }
+        }
+
+        if (report->findings[weakest].level >= level)
+        {
+            return;
+        }
+
+        memmove(&report->findings[weakest], &report->findings[weakest + 1],
+                (report->finding_count - weakest - 1) * sizeof(report->findings[0]));
+        report->finding_count--;
     }
 
     finding *item = &report->findings[report->finding_count];
@@ -857,13 +876,10 @@ static void analyze_dns(domain_report *report)
     }
 }
 
-/* Development, test and homologation names: a label equal to a short
- * keyword ("dev", "qa") or containing a long one ("homol-api"). */
-static int is_non_production(const char *name, const char *domain)
+/* Copies the labels in front of the investigated domain, lowercased, so
+ * keyword checks never match the domain itself. Returns 0 when there are none. */
+static int subdomain_prefix(const char *name, const char *domain, char *out, size_t size)
 {
-    static const char *const exact[] = {"dev", "develop", "development", "test", "testing", "tst", "qa",
-                                        "uat", "hml", "hom", "stg", "stage", "lab", "demo", "beta", "sandbox"};
-    static const char *const partial[] = {"staging", "stagging", "homolog", "homol", "preprod", "sandbox"};
     size_t name_length = strlen(name);
     size_t domain_length = strlen(domain);
 
@@ -872,11 +888,25 @@ static int is_non_production(const char *name, const char *domain)
         return 0;
     }
 
-    /* Only the labels in front of the investigated domain. */
     size_t prefix_length = name_length - domain_length - 1;
+    snprintf(out, size, "%.*s", (int)prefix_length, name);
+    to_lower(out);
+    return 1;
+}
+
+/* Development, test and homologation names: a label equal to a short
+ * keyword ("dev", "qa") or containing a long one ("homol-api"). */
+static int is_non_production(const char *name, const char *domain)
+{
+    static const char *const exact[] = {"dev", "develop", "development", "test", "testing", "tst", "qa",
+                                        "uat", "hml", "hom", "stg", "stage", "lab", "demo", "beta", "sandbox"};
+    static const char *const partial[] = {"staging", "stagging", "homolog", "homol", "preprod", "sandbox"};
     char prefix[DOMAIN_SIZE];
-    snprintf(prefix, sizeof(prefix), "%.*s", (int)prefix_length, name);
-    to_lower(prefix);
+
+    if (!subdomain_prefix(name, domain, prefix, sizeof(prefix)))
+    {
+        return 0;
+    }
 
     for (size_t i = 0; i < COUNT(partial); i++)
     {
@@ -944,7 +974,8 @@ static void analyze_non_production(domain_report *report)
             snprintf(entry, sizeof(entry), "%s%s", found > 0 ? ", " : "", sub->name);
         }
 
-        if (strlen(list) + strlen(entry) + 4 < sizeof(list))
+        /* Leave room for the ", ..." marker after this entry. */
+        if (strlen(list) + strlen(entry) + strlen(", ...") < sizeof(list))
         {
             strcat(list, entry);
         }
@@ -1050,9 +1081,16 @@ static void analyze_subdomains(domain_report *report)
             }
         }
 
+        char prefix[DOMAIN_SIZE];
+
+        if (!subdomain_prefix(sub->name, report->name, prefix, sizeof(prefix)))
+        {
+            continue;
+        }
+
         for (size_t k = 0; k < COUNT(sensitive_keywords); k++)
         {
-            if (strstr(sub->name, sensitive_keywords[k]) != NULL)
+            if (strstr(prefix, sensitive_keywords[k]) != NULL)
             {
                 if (sub->probed && sub->is_live)
                 {
@@ -1095,7 +1133,9 @@ static void analyze_subdomains(domain_report *report)
         }
     }
 
-    if (!any_probed && sensitive.count > 0)
+    /* Unprobed sensitive names: all of them in passive mode, or those past
+     * the probe limit when probing ran. */
+    if (sensitive.count > 0)
     {
         char sample[256] = "";
         size_t shown = sensitive.count > 3 ? 3 : sensitive.count;
@@ -1115,9 +1155,18 @@ static void analyze_subdomains(domain_report *report)
             strncat(sample, "...", sizeof(sample) - strlen(sample) - 1);
         }
 
-        add_finding(report, SEVERITY_LOW,
-                    "Potentially sensitive or internal subdomains exposed in public logs (%zu found: %s).",
-                    sensitive.count, sample);
+        if (any_probed)
+        {
+            add_finding(report, SEVERITY_LOW,
+                        "Potentially sensitive or internal subdomains over the probe limit, not checked (%zu found: %s).",
+                        sensitive.count, sample);
+        }
+        else
+        {
+            add_finding(report, SEVERITY_LOW,
+                        "Potentially sensitive or internal subdomains exposed in public logs (%zu found: %s).",
+                        sensitive.count, sample);
+        }
     }
 
     string_list_free(&sensitive);

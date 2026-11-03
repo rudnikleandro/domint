@@ -1,5 +1,6 @@
 #include "subdomain.h"
 
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <curl/curl.h>
 #include <stdio.h>
@@ -12,14 +13,24 @@
 #include "https.h"
 #include "json.h"
 #include "model.h"
+#include "progress.h"
 #include "util.h"
 
 #define SUBDOMAIN_MAX_SIZE (4 * 1024 * 1024)
+/* crt.sh answers with every certificate ever logged, which for large
+ * organizations is tens of megabytes sent slowly. */
+#define CRTSH_MAX_SIZE (64 * 1024 * 1024)
+#define CRTSH_TIMEOUT_SECONDS 60L
 #define MAX_PROBED_SUBDOMAINS 50
+#define PROBE_PARALLEL 16
 #define PROBE_CONNECT_TIMEOUT 2L
 #define PROBE_TOTAL_TIMEOUT 3L
+/* Headers and the start of the body are enough for the status, the
+ * Server and Location headers and the <title>. */
+#define PROBE_HEADER_MAX 8192
+#define PROBE_BODY_MAX 8192
 
-static void add_candidate(subdomain_list *subdomains, const char *candidate, const char *target_domain)
+static void add_candidate(string_list *names, const char *candidate, const char *target_domain)
 {
     if (candidate == NULL || target_domain == NULL)
     {
@@ -89,10 +100,29 @@ static void add_candidate(subdomain_list *subdomains, const char *candidate, con
         return;
     }
 
-    subdomain_list_add_unique(subdomains, normalized);
+    string_list_add(names, normalized);
 }
 
-static void extract_from_crtsh_text(subdomain_list *subdomains, const char *text, const char *target_domain)
+/* Appends the distinct names to `subdomains`. Sorting first keeps this
+ * linear in the size of the answer, which for crt.sh repeats each name
+ * once per certificate. */
+static void add_names(subdomain_list *subdomains, string_list *names)
+{
+    string_list_sort(names);
+
+    for (size_t i = 0; i < names->count; i++)
+    {
+        if (i == 0 || strcmp(names->items[i - 1], names->items[i]) != 0)
+        {
+            subdomain_list_add(subdomains, names->items[i]);
+        }
+    }
+
+    string_list_free(names);
+    subdomain_list_dedupe(subdomains);
+}
+
+static void extract_from_crtsh_text(string_list *names, const char *text, const char *target_domain)
 {
     if (text == NULL)
     {
@@ -110,7 +140,7 @@ static void extract_from_crtsh_text(subdomain_list *subdomains, const char *text
         {
             memcpy(buffer, line_start, len);
             buffer[len] = '\0';
-            add_candidate(subdomains, buffer, target_domain);
+            add_candidate(names, buffer, target_domain);
         }
 
         line_start += len;
@@ -143,6 +173,7 @@ int subdomain_parse_crtsh(const char *json_text, size_t length, const char *targ
     }
 
     size_t count = json_count(doc);
+    string_list names = {0};
 
     for (size_t i = 0; i < count; i++)
     {
@@ -157,18 +188,19 @@ int subdomain_parse_crtsh(const char *json_text, size_t length, const char *targ
 
         if (common_name != NULL)
         {
-            extract_from_crtsh_text(subdomains, common_name, target_domain);
+            extract_from_crtsh_text(&names, common_name, target_domain);
         }
 
         const char *name_value = json_get_string(entry, "name_value");
 
         if (name_value != NULL)
         {
-            extract_from_crtsh_text(subdomains, name_value, target_domain);
+            extract_from_crtsh_text(&names, name_value, target_domain);
         }
     }
 
     json_free(doc);
+    add_names(subdomains, &names);
     return 0;
 }
 
@@ -195,6 +227,7 @@ int subdomain_parse_otx(const char *json_text, size_t length, const char *target
     }
 
     size_t count = json_count(passive_dns);
+    string_list names = {0};
 
     for (size_t i = 0; i < count; i++)
     {
@@ -209,11 +242,12 @@ int subdomain_parse_otx(const char *json_text, size_t length, const char *target
 
         if (hostname != NULL)
         {
-            add_candidate(subdomains, hostname, target_domain);
+            add_candidate(&names, hostname, target_domain);
         }
     }
 
     json_free(doc);
+    add_names(subdomains, &names);
     return 0;
 }
 
@@ -230,6 +264,7 @@ int subdomain_parse_hackertarget(const char *text, const char *target_domain, su
     }
 
     const char *line = text;
+    string_list names = {0};
 
     while (*line != '\0')
     {
@@ -245,7 +280,7 @@ int subdomain_parse_hackertarget(const char *text, const char *target_domain, su
             {
                 memcpy(buffer, line, host_len);
                 buffer[host_len] = '\0';
-                add_candidate(subdomains, buffer, target_domain);
+                add_candidate(&names, buffer, target_domain);
             }
         }
 
@@ -257,17 +292,31 @@ int subdomain_parse_hackertarget(const char *text, const char *target_domain, su
         }
     }
 
+    add_names(subdomains, &names);
     return 0;
 }
 
-void subdomain_collect(const char *domain, observation_list *observations)
+/* Moves the names in `from` into `to`, keeping `to` free of repeats. */
+static void merge_names(subdomain_list *to, subdomain_list *from)
+{
+    for (size_t i = 0; i < from->count; i++)
+    {
+        subdomain_list_add(to, from->items[i].name);
+    }
+
+    subdomain_list_free(from);
+    subdomain_list_dedupe(to);
+}
+
+void subdomain_collect(const char *domain, observation_list *observations, subdomain_list *found)
 {
     char url[512];
     char detail[FIELD_SIZE];
 
     /* 1. Certificate Transparency via crt.sh */
+    progress_step("subdomains: crt.sh");
     snprintf(url, sizeof(url), "https://crt.sh/?q=%%25.%s&output=json", domain);
-    https_response crtsh = https_get(url, SUBDOMAIN_MAX_SIZE);
+    https_response crtsh = https_get_timeout(url, CRTSH_MAX_SIZE, CRTSH_TIMEOUT_SECONDS);
 
     if (crtsh.status == OBS_OK)
     {
@@ -285,7 +334,11 @@ void subdomain_collect(const char *domain, observation_list *observations)
             crtsh.status = OBS_ERROR;
         }
 
-        subdomain_list_free(&temp);
+        merge_names(found, &temp);
+    }
+    else if (crtsh.status == OBS_LIMITED && crtsh.http_code != 429)
+    {
+        snprintf(detail, sizeof(detail), "%s; no Certificate Transparency names were collected", crtsh.error);
     }
     else
     {
@@ -297,6 +350,7 @@ void subdomain_collect(const char *domain, observation_list *observations)
     free(crtsh.data);
 
     /* 2. AlienVault OTX Passive DNS */
+    progress_step("subdomains: AlienVault OTX");
     snprintf(url, sizeof(url), "https://otx.alienvault.com/api/v1/indicators/domain/%s/passive_dns", domain);
     https_response otx = https_get(url, SUBDOMAIN_MAX_SIZE);
 
@@ -316,7 +370,7 @@ void subdomain_collect(const char *domain, observation_list *observations)
             otx.status = OBS_EMPTY;
         }
 
-        subdomain_list_free(&temp);
+        merge_names(found, &temp);
     }
     else
     {
@@ -328,6 +382,7 @@ void subdomain_collect(const char *domain, observation_list *observations)
     free(otx.data);
 
     /* 3. HackerTarget Host Search */
+    progress_step("subdomains: HackerTarget");
     snprintf(url, sizeof(url), "https://api.hackertarget.com/hostsearch/?q=%s", domain);
     https_response ht = https_get(url, SUBDOMAIN_MAX_SIZE);
 
@@ -347,7 +402,7 @@ void subdomain_collect(const char *domain, observation_list *observations)
             ht.status = OBS_EMPTY;
         }
 
-        subdomain_list_free(&temp);
+        merge_names(found, &temp);
     }
     else
     {
@@ -359,15 +414,12 @@ void subdomain_collect(const char *domain, observation_list *observations)
     free(ht.data);
 }
 
+static void apply_probes(const observation_list *observations, subdomain_list *subdomains);
+
 void subdomain_interpret(const char *domain, const observation_list *observations,
                          subdomain_list *subdomains, lookup_status *status)
 {
-    /* If already populated (e.g. earlier in pipeline), preserve existing items and their probe results */
-    if (subdomains->count > 0)
-    {
-        *status = LOOKUP_OK;
-        return;
-    }
+    subdomain_list_free(subdomains);
 
     int queried = 0;
     int success = 0;
@@ -415,7 +467,8 @@ void subdomain_interpret(const char *domain, const observation_list *observation
         }
     }
 
-    subdomain_list_sort(subdomains);
+    subdomain_list_dedupe(subdomains);
+    apply_probes(observations, subdomains);
 
     if (!queried)
     {
@@ -429,55 +482,6 @@ void subdomain_interpret(const char *domain, const observation_list *observation
     {
         *status = LOOKUP_FAILED;
     }
-}
-
-static size_t probe_header_callback(char *buffer, size_t size, size_t nitems, void *userdata)
-{
-    subdomain_info *info = userdata;
-    size_t len = size * nitems;
-
-    if (strncasecmp(buffer, "server:", 7) == 0)
-    {
-        const char *val = buffer + 7;
-
-        while (*val == ' ' || *val == '\t')
-        {
-            val++;
-        }
-
-        size_t val_len = strcspn(val, "\r\n");
-
-        if (val_len > 0 && val_len < sizeof(info->server))
-        {
-            memcpy(info->server, val, val_len);
-            info->server[val_len] = '\0';
-        }
-    }
-
-    return len;
-}
-
-typedef struct
-{
-    char body[8192];
-    size_t body_len;
-} probe_body;
-
-static size_t probe_body_callback(char *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    probe_body *b = userdata;
-    size_t bytes = size * nmemb;
-    size_t space = sizeof(b->body) - 1 - b->body_len;
-
-    if (space > 0)
-    {
-        size_t to_copy = bytes < space ? bytes : space;
-        memcpy(b->body + b->body_len, ptr, to_copy);
-        b->body_len += to_copy;
-        b->body[b->body_len] = '\0';
-    }
-
-    return bytes;
 }
 
 static void extract_title(const char *body, char *out, size_t max_size)
@@ -572,104 +576,330 @@ static void extract_title(const char *body, char *out, size_t max_size)
     }
 }
 
-static int probe_url(const char *url, subdomain_info *info, int is_https)
+/* One HTTP or HTTPS request to one subdomain. The raw answer (headers and
+ * the start of the body) is recorded as the observation. */
+typedef struct
 {
-    CURL *curl = curl_easy_init();
+    const char *name;
+    int is_https;
+    CURL *curl;
+    CURLcode result;
+    char error[CURL_ERROR_SIZE];
+    char ip[IP_SIZE];
+    char *data;
+    size_t length;
+    size_t header_length;
+    size_t body_length;
+    int body_full;
+} probe;
 
-    if (curl == NULL)
+static void probe_append(probe *p, const char *chunk, size_t length)
+{
+    p->data = xrealloc(p->data, p->length + length + 1);
+    memcpy(p->data + p->length, chunk, length);
+    p->length += length;
+    p->data[p->length] = '\0';
+}
+
+static size_t probe_header_callback(char *buffer, size_t size, size_t nitems, void *userdata)
+{
+    probe *p = userdata;
+    size_t length = size * nitems;
+
+    if (p->header_length + length <= PROBE_HEADER_MAX)
     {
-        return -1;
+        probe_append(p, buffer, length);
+        p->header_length += length;
     }
 
-    probe_body b;
-    memset(&b, 0, sizeof(b));
+    return length;
+}
 
-    char error_buffer[CURL_ERROR_SIZE] = "";
+/* Stops the transfer once enough of the body is in: a large page would
+ * otherwise run into the timeout and count as no answer. */
+static size_t probe_body_callback(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    probe *p = userdata;
+    size_t length = size * nmemb;
+    size_t space = PROBE_BODY_MAX - p->body_length;
 
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, PROBE_CONNECT_TIMEOUT);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, PROBE_TOTAL_TIMEOUT);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, HTTP_USER_AGENT);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, probe_header_callback);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, info);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, probe_body_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &b);
-    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
+    probe_append(p, ptr, length < space ? length : space);
+    p->body_length += length < space ? length : space;
 
-    CURLcode code = curl_easy_perform(curl);
-
-    if (code == CURLE_OK)
+    if (p->body_length == PROBE_BODY_MAX)
     {
-        long response_code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-        info->http_code = response_code;
-        info->is_live = 1;
-        snprintf(info->protocol, sizeof(info->protocol), "%s", is_https ? "https" : "http");
-
-        extract_title(b.body, info->title, sizeof(info->title));
-
-        char *primary_ip = NULL;
-
-        if (curl_easy_getinfo(curl, CURLINFO_PRIMARY_IP, &primary_ip) == CURLE_OK && primary_ip != NULL && primary_ip[0] != '\0')
-        {
-            snprintf(info->ip, sizeof(info->ip), "%s", primary_ip);
-        }
-
-        char *redirect_url = NULL;
-
-        if (curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &redirect_url) == CURLE_OK && redirect_url != NULL && redirect_url[0] != '\0')
-        {
-            snprintf(info->location, sizeof(info->location), "%s", redirect_url);
-        }
-
-        curl_easy_cleanup(curl);
+        p->body_full = 1;
         return 0;
     }
 
-    if (info->error[0] == '\0')
-    {
-        snprintf(info->error, sizeof(info->error), "%s",
-                 error_buffer[0] != '\0' ? error_buffer : curl_easy_strerror(code));
-    }
-
-    curl_easy_cleanup(curl);
-    return -1;
+    return length;
 }
 
-static void probe_subdomain(subdomain_info *info)
+static int probe_start(probe *p)
 {
-    char url[512];
+    char url[DOMAIN_SIZE + 16];
 
-    info->probed = 1;
-    info->is_live = 0;
-    info->http_code = 0;
-    info->error[0] = '\0';
-    info->server[0] = '\0';
-    info->location[0] = '\0';
-    info->title[0] = '\0';
-    info->ip[0] = '\0';
+    p->curl = curl_easy_init();
 
-    /* Try HTTPS first */
-    snprintf(url, sizeof(url), "https://%s/", info->name);
+    if (p->curl == NULL)
+    {
+        p->result = CURLE_FAILED_INIT;
+        return -1;
+    }
 
-    if (probe_url(url, info, 1) == 0)
+    snprintf(url, sizeof(url), "%s://%s/", p->is_https ? "https" : "http", p->name);
+
+    curl_easy_setopt(p->curl, CURLOPT_URL, url);
+    curl_easy_setopt(p->curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(p->curl, CURLOPT_CONNECTTIMEOUT, PROBE_CONNECT_TIMEOUT);
+    curl_easy_setopt(p->curl, CURLOPT_TIMEOUT, PROBE_TOTAL_TIMEOUT);
+    curl_easy_setopt(p->curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(p->curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(p->curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(p->curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(p->curl, CURLOPT_USERAGENT, HTTP_USER_AGENT);
+    curl_easy_setopt(p->curl, CURLOPT_HEADERFUNCTION, probe_header_callback);
+    curl_easy_setopt(p->curl, CURLOPT_HEADERDATA, p);
+    curl_easy_setopt(p->curl, CURLOPT_WRITEFUNCTION, probe_body_callback);
+    curl_easy_setopt(p->curl, CURLOPT_WRITEDATA, p);
+    curl_easy_setopt(p->curl, CURLOPT_ERRORBUFFER, p->error);
+    curl_easy_setopt(p->curl, CURLOPT_PRIVATE, p);
+    return 0;
+}
+
+static void probe_finish(probe *p, CURLcode result)
+{
+    char *primary_ip = NULL;
+
+    p->result = result == CURLE_WRITE_ERROR && p->body_full ? CURLE_OK : result;
+
+    if (curl_easy_getinfo(p->curl, CURLINFO_PRIMARY_IP, &primary_ip) == CURLE_OK && primary_ip != NULL)
+    {
+        snprintf(p->ip, sizeof(p->ip), "%s", primary_ip);
+    }
+
+    curl_easy_cleanup(p->curl);
+    p->curl = NULL;
+}
+
+/* Runs the probes PROBE_PARALLEL at a time: the timeouts then overlap
+ * instead of adding up for subdomains that do not answer. */
+static void probe_run(probe *probes, size_t count)
+{
+    CURLM *multi = curl_multi_init();
+    size_t next = 0;
+    size_t running = 0;
+    size_t done = 0;
+
+    if (multi == NULL)
+    {
+        for (size_t i = 0; i < count; i++)
+        {
+            probes[i].result = CURLE_FAILED_INIT;
+        }
+
+        return;
+    }
+
+    while (next < count || running > 0)
+    {
+        while (running < PROBE_PARALLEL && next < count)
+        {
+            if (probe_start(&probes[next]) == 0)
+            {
+                curl_multi_add_handle(multi, probes[next].curl);
+                running++;
+            }
+
+            next++;
+        }
+
+        int still_running = 0;
+        int queued = 0;
+        CURLMsg *message;
+
+        curl_multi_perform(multi, &still_running);
+
+        while ((message = curl_multi_info_read(multi, &queued)) != NULL)
+        {
+            if (message->msg != CURLMSG_DONE)
+            {
+                continue;
+            }
+
+            char *private = NULL;
+            CURL *easy = message->easy_handle;
+            CURLcode result = message->data.result;
+
+            curl_easy_getinfo(easy, CURLINFO_PRIVATE, &private);
+            curl_multi_remove_handle(multi, easy);
+            probe_finish((probe *)private, result);
+            running--;
+            done++;
+        }
+
+        progress_detail("probing subdomains over %s (%zu/%zu)", probes[0].is_https ? "HTTPS" : "HTTP", done, count);
+
+        if (running > 0)
+        {
+            curl_multi_poll(multi, NULL, 0, 1000, NULL);
+        }
+    }
+
+    curl_multi_cleanup(multi);
+}
+
+static int is_no_answer(CURLcode code)
+{
+    return code == CURLE_COULDNT_RESOLVE_HOST || code == CURLE_COULDNT_CONNECT || code == CURLE_OPERATION_TIMEDOUT ||
+           code == CURLE_RECV_ERROR || code == CURLE_SEND_ERROR || code == CURLE_GOT_NOTHING;
+}
+
+/* Source "https://192.0.2.10:443": the scheme and the address that
+ * answered, or the name when no connection was made. */
+static void probe_record(const probe *p, observation_list *observations)
+{
+    const char *scheme = p->is_https ? "https" : "http";
+    const char *port = p->is_https ? "443" : "80";
+    char source[DOMAIN_SIZE + 16];
+
+    if (p->ip[0] == '\0')
+    {
+        snprintf(source, sizeof(source), "%s://%s", scheme, p->name);
+    }
+    else if (strchr(p->ip, ':') != NULL)
+    {
+        snprintf(source, sizeof(source), "%s://[%s]:%s", scheme, p->ip, port);
+    }
+    else
+    {
+        snprintf(source, sizeof(source), "%s://%s:%s", scheme, p->ip, port);
+    }
+
+    if (p->result == CURLE_OK)
+    {
+        record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, source, p->name, OBS_OK, NULL, p->data, p->length);
+        return;
+    }
+
+    record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, source, p->name,
+                       is_no_answer(p->result) ? OBS_NO_RESPONSE : OBS_ERROR,
+                       p->error[0] != '\0' ? p->error : curl_easy_strerror(p->result), NULL, 0);
+}
+
+/* The address in a probe source, or "" when it names the host. */
+static void probe_source_ip(const char *source, char *scheme, size_t scheme_size, char *ip, size_t ip_size)
+{
+    const char *host = strstr(source, "://");
+    char address[IP_SIZE];
+    unsigned char binary[sizeof(struct in6_addr)];
+
+    scheme[0] = '\0';
+    ip[0] = '\0';
+
+    if (host == NULL)
     {
         return;
     }
 
-    /* If HTTPS fails, try plain HTTP */
-    snprintf(url, sizeof(url), "http://%s/", info->name);
+    snprintf(scheme, scheme_size, "%.*s", (int)(host - source), source);
+    host += 3;
 
-    if (probe_url(url, info, 0) == 0)
+    if (*host == '[')
     {
-        return;
+        snprintf(address, sizeof(address), "%.*s", (int)strcspn(host + 1, "]"), host + 1);
+    }
+    else
+    {
+        snprintf(address, sizeof(address), "%.*s", (int)strcspn(host, ":"), host);
     }
 
-    info->is_live = 0;
+    if (inet_pton(AF_INET, address, binary) == 1 || inet_pton(AF_INET6, address, binary) == 1)
+    {
+        snprintf(ip, ip_size, "%s", address);
+    }
+}
+
+/* Fills `sub` from a recorded answer. A 1xx interim response is skipped
+ * for the final one that follows it. */
+static void probe_parse(const char *text, subdomain_info *sub)
+{
+    const char *response = text;
+    http_info http;
+
+    while (strncmp(response, "HTTP/", 5) == 0)
+    {
+        const char *code = strchr(response, ' ');
+        const char *end = strstr(response, "\r\n\r\n");
+
+        if (code == NULL || code[1] != '1' || end == NULL)
+        {
+            break;
+        }
+
+        response = end + 4;
+    }
+
+    memset(&http, 0, sizeof(http));
+    http_parse(response, &http);
+
+    const char *code = strchr(http.status_line, ' ');
+    sub->http_code = code != NULL ? strtol(code + 1, NULL, 10) : 0;
+    snprintf(sub->server, sizeof(sub->server), "%s", http.server);
+    snprintf(sub->location, sizeof(sub->location), "%s", http.location);
+
+    const char *body = strstr(response, "\r\n\r\n");
+    extract_title(body != NULL ? body + 4 : "", sub->title, sizeof(sub->title));
+}
+
+static int compare_name(const void *key, const void *item)
+{
+    return strcasecmp(key, ((const subdomain_info *)item)->name);
+}
+
+/* Builds the probe results of each subdomain from its recorded attempts:
+ * the first answer wins (HTTPS is recorded before HTTP), otherwise the
+ * last failure is kept. `subdomains` must be sorted. */
+static void apply_probes(const observation_list *observations, subdomain_list *subdomains)
+{
+    for (size_t i = 0; i < observations->count; i++)
+    {
+        const observation *obs = &observations->items[i];
+
+        if (strcmp(obs->collector, SUBDOMAIN_PROBE_COLLECTOR) != 0 || obs->status == OBS_NOT_QUERIED ||
+            strstr(obs->source, "://") == NULL)
+        {
+            continue;
+        }
+
+        subdomain_info *sub = bsearch(obs->query, subdomains->items, subdomains->count, sizeof(*subdomains->items),
+                                      compare_name);
+
+        if (sub == NULL || sub->is_live)
+        {
+            continue;
+        }
+
+        char name[DOMAIN_SIZE];
+        snprintf(name, sizeof(name), "%s", sub->name);
+        memset(sub, 0, sizeof(*sub));
+        snprintf(sub->name, sizeof(sub->name), "%s", name);
+
+        sub->probed = 1;
+        probe_source_ip(obs->source, sub->protocol, sizeof(sub->protocol), sub->ip, sizeof(sub->ip));
+
+        if (obs->status == OBS_OK)
+        {
+            char *text = observation_text(obs);
+            sub->is_live = 1;
+            probe_parse(text, sub);
+            free(text);
+        }
+        else
+        {
+            snprintf(sub->error, sizeof(sub->error), "%s", obs->detail);
+        }
+    }
 }
 
 void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
@@ -695,6 +925,54 @@ void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
     }
 
     size_t to_probe = subdomains->count > MAX_PROBED_SUBDOMAINS ? MAX_PROBED_SUBDOMAINS : subdomains->count;
+    probe *secure = xcalloc(to_probe, sizeof(*secure));
+    probe *plain = xcalloc(to_probe, sizeof(*plain));
+    size_t plain_count = 0;
+
+    /* HTTPS first; plain HTTP only for the names that did not answer. */
+    for (size_t i = 0; i < to_probe; i++)
+    {
+        secure[i].name = subdomains->items[i].name;
+        secure[i].is_https = 1;
+    }
+
+    probe_run(secure, to_probe);
+
+    for (size_t i = 0; i < to_probe; i++)
+    {
+        if (secure[i].result != CURLE_OK)
+        {
+            plain[plain_count++].name = secure[i].name;
+        }
+    }
+
+    probe_run(plain, plain_count);
+
+    for (size_t i = 0, j = 0; i < to_probe; i++)
+    {
+        probe_record(&secure[i], observations);
+
+        if (secure[i].result != CURLE_OK)
+        {
+            probe_record(&plain[j++], observations);
+        }
+    }
+
+    for (size_t i = 0; i < to_probe; i++)
+    {
+        free(secure[i].data);
+    }
+
+    for (size_t i = 0; i < plain_count; i++)
+    {
+        free(plain[i].data);
+    }
+
+    free(secure);
+    free(plain);
+
+    apply_probes(observations, subdomains);
+
     size_t live_count = 0;
     size_t code_200 = 0;
     size_t code_403 = 0;
@@ -702,21 +980,21 @@ void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
 
     for (size_t i = 0; i < to_probe; i++)
     {
-        probe_subdomain(&subdomains->items[i]);
+        const subdomain_info *sub = &subdomains->items[i];
 
-        if (subdomains->items[i].is_live)
+        if (sub->is_live)
         {
             live_count++;
 
-            if (subdomains->items[i].http_code == 200)
+            if (sub->http_code == 200)
             {
                 code_200++;
             }
-            else if (subdomains->items[i].http_code == 401 || subdomains->items[i].http_code == 403)
+            else if (sub->http_code == 401 || sub->http_code == 403)
             {
                 code_403++;
             }
-            else if (subdomains->items[i].http_code >= 300 && subdomains->items[i].http_code < 400)
+            else if (sub->http_code >= 300 && sub->http_code < 400)
             {
                 code_redir++;
             }
