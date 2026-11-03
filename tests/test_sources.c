@@ -53,6 +53,7 @@ void test_sources(void)
     CHECK_STR(info.updated, "2019-09-09T15:39:04Z");
     CHECK_INT(info.statuses.count, 6);
     CHECK(string_list_contains(&info.statuses, "client transfer prohibited"));
+    CHECK(string_list_contains(&info.statuses, "server update prohibited"));
     free_registration(&info);
 
     memset(&info, 0, sizeof(info));
@@ -92,6 +93,7 @@ void test_sources(void)
 
     CHECK_INT(info.statuses.count, 6);
     CHECK(string_list_contains(&info.statuses, "clientDeleteProhibited"));
+    CHECK(string_list_contains(&info.statuses, "serverTransferProhibited"));
     CHECK_STR(info.abuse_email, "abusecomplaints@markmonitor.com");
     free_registration(&info);
 
