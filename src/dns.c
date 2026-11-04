@@ -300,7 +300,8 @@ static int dns_query(res_state resolver, const char *name, int type, unsigned ch
     memcpy(query_edns, query, (size_t)query_len);
     int query_edns_len = dns_append_edns0(query_edns, query_len, sizeof(query_edns));
 
-    for (int i = 0; i < resolver->nscount; i++)
+    /* nsaddr_list holds MAXNS entries; nscount comes from the system. */
+    for (int i = 0; i < resolver->nscount && i < MAXNS; i++)
     {
         const struct sockaddr_in *nameserver = &resolver->nsaddr_list[i];
 
@@ -521,7 +522,7 @@ static void describe_resolvers(const struct __res_state *resolver, int custom, c
     size_t len = (size_t)snprintf(out, size, "%s", custom ? "" : "system");
     const char *separator = custom ? "" : " (";
 
-    for (int i = 0; i < resolver->nscount && len < size; i++)
+    for (int i = 0; i < resolver->nscount && i < MAXNS && len < size; i++)
     {
         char ip[INET_ADDRSTRLEN];
 

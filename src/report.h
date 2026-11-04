@@ -20,7 +20,7 @@ typedef struct
 
 /* Writes the plain-text report: summary and signals per domain, the
  * collected data and sources with `full`, raw answers with `raw`. `links`
- * is only used when count > 1. */
+ * is only used when count > 1, and may be NULL to leave correlation out. */
 void print_report(FILE *out, const domain_report *reports, size_t count, const correlation *links,
                   const report_options *options);
 

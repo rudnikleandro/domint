@@ -67,6 +67,15 @@ void sanitize_text(char *text, size_t length, int keep_newlines)
         {
             text[i] = '?';
         }
+        else if (byte == 0xc2 && i + 1 < length && (unsigned char)text[i + 1] >= 0x80 &&
+                 (unsigned char)text[i + 1] <= 0x9f)
+        {
+            /* U+0080-U+009F, the C1 controls: U+009B acts as ESC [ in
+             * some terminals. */
+            text[i] = '?';
+            text[i + 1] = '?';
+            i++;
+        }
     }
 }
 

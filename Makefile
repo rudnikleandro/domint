@@ -20,7 +20,7 @@ OBJS = $(SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 # make test links every module except main.o with the files in tests/ and
 # runs them from the project root, where tests/fixtures/ is found.
 TEST_DIR = tests
-TEST_SRCS = $(wildcard $(TEST_DIR)/*.c)
+TEST_SRCS = $(filter-out $(TEST_DIR)/fuzz.c,$(wildcard $(TEST_DIR)/*.c))
 TEST_OBJS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BUILD_DIR)/tests/%.o)
 TEST_BIN = $(BUILD_DIR)/run_tests
 
@@ -46,6 +46,17 @@ $(TEST_BIN): $(filter-out $(BUILD_DIR)/main.o,$(OBJS)) $(TEST_OBJS)
 $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c | $(BUILD_DIR)/tests
 	$(CC) $(CFLAGS) -I$(SRC_DIR) -c $< -o $@
 
+# make fuzz builds the parsers and report writers with ASan and UBSan and
+# feeds them corrupted inputs; FUZZ_RUNS sets the inputs per target.
+FUZZ_BIN = $(BUILD_DIR)/fuzz
+FUZZ_FLAGS = -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+FUZZ_RUNS ?= 20000
+
+fuzz: | $(BUILD_DIR)
+	$(CC) -Wall -Wextra -Werror -pthread $(FUZZ_FLAGS) -I$(SRC_DIR) $(filter-out $(SRC_DIR)/main.c,$(SRCS)) \
+		$(TEST_DIR)/fuzz.c -o $(FUZZ_BIN) $(LDLIBS) $(FUZZ_FLAGS)
+	./$(FUZZ_BIN) $(FUZZ_RUNS)
+
 install: $(TARGET)
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
@@ -56,6 +67,6 @@ uninstall:
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
 
-.PHONY: all test install uninstall clean
+.PHONY: all test fuzz install uninstall clean
 
 -include $(DEPS)

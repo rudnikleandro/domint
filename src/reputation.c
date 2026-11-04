@@ -7,6 +7,7 @@
 #include "https.h"
 #include "json.h"
 #include "model.h"
+#include "util.h"
 
 #define OTX_SOURCE "otx.alienvault.com"
 #define URLHAUS_SOURCE "urlhaus-api.abuse.ch"
@@ -20,29 +21,51 @@
 
 static const char abusech_missing[] = "set ABUSECH_AUTH_KEY to query it (free key at https://auth.abuse.ch)";
 
-/* A count that the APIs send either as a number or as a numeric string. */
+/* Counts above this are clamped: no source has that many entries, and a
+ * double past LONG_MAX (or NaN, or infinity) cannot be converted. */
+#define MAX_COUNT 1000000000L
+
+/* A count that the APIs send either as a number or as a numeric string;
+ * anything negative or not a number reads as 0. */
 static long json_long(const json_value *object, const char *key)
 {
     const json_value *value = json_get(object, key);
+    long count = 0;
 
-    if (value == NULL)
+    if (value != NULL && value->type == JSON_NUMBER)
     {
-        return 0;
+        if (value->number >= (double)MAX_COUNT)
+        {
+            return MAX_COUNT;
+        }
+
+        /* The comparison is false for NaN, which then stays 0. */
+        count = value->number > 0 ? (long)value->number : 0;
+    }
+    else if (value != NULL && value->type == JSON_STRING)
+    {
+        count = strtol(value->string, NULL, 10);
     }
 
-    if (value->type == JSON_NUMBER)
-    {
-        return (long)value->number;
-    }
+    return count < 0 ? 0 : count > MAX_COUNT ? MAX_COUNT : count;
+}
 
-    return value->type == JSON_STRING ? strtol(value->string, NULL, 10) : 0;
+/* Names from these sources are free text shown on one line of the report:
+ * newlines and tabs written by their authors are neutralized too. */
+static void add_line(string_list *list, const char *value)
+{
+    char line[FIELD_SIZE];
+
+    snprintf(line, sizeof(line), "%s", value);
+    sanitize_text(line, strlen(line), 0);
+    string_list_add_unique(list, line);
 }
 
 static void add_limited(string_list *list, const char *value)
 {
     if (value != NULL && value[0] != '\0' && list->count < MAX_LISTED_NAMES)
     {
-        string_list_add_unique(list, value);
+        add_line(list, value);
     }
 }
 
@@ -53,14 +76,28 @@ static void record_answer(observation_list *observations, const char *source, co
                        response->status == OBS_OK ? summary : response->error, response->data, response->length);
 }
 
+/* A key from the environment goes into a request header: one with a line
+ * break would inject headers of its own, so it is not used. */
+static const char *usable_key(const char *name)
+{
+    const char *key = getenv(name);
+
+    if (key == NULL || key[0] == '\0' || strpbrk(key, "\r\n") != NULL)
+    {
+        return NULL;
+    }
+
+    return key;
+}
+
 void reputation_collect(const char *domain, observation_list *observations)
 {
     char url[512];
     char header[FIELD_SIZE];
-    const char *otx_key = getenv("OTX_API_KEY");
+    const char *otx_key = usable_key("OTX_API_KEY");
     const char *otx_headers[2] = {NULL, NULL};
 
-    if (otx_key != NULL && otx_key[0] != '\0')
+    if (otx_key != NULL)
     {
         snprintf(header, sizeof(header), "X-OTX-API-KEY: %s", otx_key);
         otx_headers[0] = header;
@@ -71,9 +108,9 @@ void reputation_collect(const char *domain, observation_list *observations)
     record_answer(observations, OTX_SOURCE, domain, &otx, "pulses and allowlist validation");
     free(otx.data);
 
-    const char *key = getenv("ABUSECH_AUTH_KEY");
+    const char *key = usable_key("ABUSECH_AUTH_KEY");
 
-    if (key == NULL || key[0] == '\0')
+    if (key == NULL)
     {
         record_observation(observations, REPUTATION_COLLECTOR, URLHAUS_SOURCE, domain, OBS_NOT_QUERIED, abusech_missing,
                            NULL, 0);
@@ -129,7 +166,7 @@ int reputation_parse_otx(const char *text, size_t length, reputation_info *info)
         }
 
         snprintf(shortened, sizeof(shortened), strlen(name) > MAX_PULSE_NAME_LENGTH ? "%.37s..." : "%s", name);
-        string_list_add_unique(&info->otx_pulse_names, shortened);
+        add_line(&info->otx_pulse_names, shortened);
     }
 
     /* "validation" lists the reasons OTX treats the domain as known-good

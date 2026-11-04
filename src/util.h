@@ -8,8 +8,9 @@ void *xcalloc(size_t count, size_t size);
 void *xrealloc(void *pointer, size_t size);
 char *xstrdup(const char *text);
 
-/* Replaces control bytes (terminal escapes, NULs) in text that came from a
- * server; `keep_newlines` keeps \n, \t and \r\n for multi-line answers. */
+/* Replaces control bytes (terminal escapes, NULs, and the UTF-8 encoded C1
+ * controls U+0080-U+009F) in text that came from a server, keeping its
+ * length; `keep_newlines` keeps \n, \t and \r\n for multi-line answers. */
 void sanitize_text(char *text, size_t length, int keep_newlines);
 
 int starts_with_ci(const char *text, const char *prefix);

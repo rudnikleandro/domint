@@ -10,6 +10,7 @@
 #include "report.h"
 #include "subdomain.h"
 #include "test.h"
+#include "util.h"
 
 static void add_live(domain_report *report, const char *name, long code, const char *ip, const char *asn,
                      const char *as_name)
@@ -541,6 +542,19 @@ static void test_reputation_parsers(void)
     CHECK_INT(reputation_parse_threatfox(no_iocs, strlen(no_iocs), &info), 0);
     CHECK_INT(reputation_parse_otx("[]", 2, &info), -1);
 
+    /* Counts out of range, from a broken or hostile answer, are clamped. */
+    reputation_info odd = {0};
+    const char *huge = "{\"pulse_info\":{\"count\":-1e9992,\"pulses\":[]},\"validation\":[]}";
+    const char *infinite = "{\"pulse_info\":{\"count\":1e999,\"pulses\":[]},\"validation\":[]}";
+    const char *negative = "{\"query_status\":\"ok\",\"url_count\":\"-5\",\"urls\":[]}";
+
+    CHECK_INT(reputation_parse_otx(huge, strlen(huge), &odd), 0);
+    CHECK_INT(odd.otx_pulses, 0);
+    CHECK_INT(reputation_parse_otx(infinite, strlen(infinite), &odd), 0);
+    CHECK_INT(odd.otx_pulses, 1000000000L);
+    CHECK_INT(reputation_parse_urlhaus(negative, strlen(negative), &odd), 0);
+    CHECK_INT(odd.urlhaus_urls, 0);
+
     domain_report report = {0};
     snprintf(report.name, sizeof(report.name), "bad.example");
     report.modules = MODULE_REPUTATION;
@@ -596,7 +610,8 @@ static void test_json_output(void)
     const json_value *items = json_get_array(json_get_object(domain, "subdomains"), "items");
     const json_value *indicators = json_get_object(domain, "indicators");
 
-    CHECK_STR(json_get_string(registration, "registrant"), "Caf\xc3\xa9 \"Quoted\"\tName\x01");
+    /* The control byte went out as \u0001 and the reader neutralizes it. */
+    CHECK_STR(json_get_string(registration, "registrant"), "Caf\xc3\xa9 \"Quoted\"\tName?");
     CHECK_STR(json_get_string(json_at(items, 0), "state"), "online");
     CHECK_STR(json_get_string(json_at(items, 1), "cname"), "gone.azurewebsites.net");
     CHECK_INT(json_count(json_get_array(indicators, "domains")), 2);
@@ -607,6 +622,29 @@ static void test_json_output(void)
     json_free(doc);
     free(text);
     domain_report_free(&report);
+}
+
+/* Text from third parties never reaches the terminal with control
+ * characters: an OTX pulse anyone can create, an RDAP escape, a C1 CSI. */
+static void test_terminal_escapes(void)
+{
+    const char *otx = "{\"pulse_info\":{\"count\":1,\"pulses\":[{\"name\":\"x\\u001b]0;owned\\u0007\\u001b[2J\\nnext\"}]},"
+                      "\"validation\":[]}";
+    const char *rdap_name = "{\"name\":\"Owner\\u001b[31m\\u009b2J\"}";
+    reputation_info info = {0};
+
+    CHECK_INT(reputation_parse_otx(otx, strlen(otx), &info), 0);
+    CHECK_STR(info.otx_pulse_names.items[0], "x?]0;owned??[2J?next");
+
+    json_value *doc = json_parse(rdap_name, strlen(rdap_name));
+    CHECK_STR(json_get_string(doc, "name"), "Owner?[31m??2J");
+    json_free(doc);
+
+    char text[] = "a\xc2\x9b" "31m b\xc3\xa9 \x1b[0m\r\n";
+    sanitize_text(text, strlen(text), 1);
+    CHECK_STR(text, "a??31m b\xc3\xa9 ?[0m\r\n");
+
+    string_list_free(&info.otx_pulse_names);
 }
 
 void test_subdomains(void)
@@ -815,4 +853,5 @@ void test_subdomains(void)
     test_infrastructure_signals();
     test_reputation_parsers();
     test_json_output();
+    test_terminal_escapes();
 }

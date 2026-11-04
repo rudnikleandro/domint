@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "domain.h"
 #include "model.h"
 #include "util.h"
 #include "net.h"
@@ -282,7 +283,16 @@ static void iana_server(const char *iana_answer, char *server, size_t size)
 {
     /* gTLDs use "whois:"; some ccTLDs use "refer:" instead. */
     static const char *const fields[] = {"whois:", "refer:", NULL};
+    char name[DOMAIN_SIZE];
+
     extract_first(iana_answer, fields, server, size);
+
+    /* WHOIS travels in clear text, so the answer may not be IANA's: only a
+     * well-formed host name is worth connecting to. */
+    if (server[0] != '\0' && normalize_domain(server, name, sizeof(name)) != 0)
+    {
+        server[0] = '\0';
+    }
 }
 
 static const char *tld_of(const char *domain)

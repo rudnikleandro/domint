@@ -151,7 +151,11 @@ static char *parse_string_raw(parser *p)
 
         if (c == '"')
         {
+            /* Escapes such as \u001b decode to control characters that
+             * would reach the analyst's terminal; every string read here
+             * comes from a third party, so neutralize them now. */
             out[length] = '\0';
+            sanitize_text(out, length, 1);
             return out;
         }
 

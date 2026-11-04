@@ -1753,7 +1753,11 @@ void print_report(FILE *out, const domain_report *reports, size_t count, const c
 
     if (count > 1)
     {
-        print_correlation(out, reports, count, links);
+        if (links != NULL)
+        {
+            print_correlation(out, reports, count, links);
+        }
+
         if (options->modules == 0 || (options->modules & MODULE_SUBDOMAINS))
         {
             print_all_subdomains(out, reports, count, options->full);
