@@ -2,3 +2,8 @@ domint
 build/
 *.o
 .DS_Store
+# Reports from investigations stay out of the repository
+relatorio*.txt
+report*.txt
+report*.json
+reports/
