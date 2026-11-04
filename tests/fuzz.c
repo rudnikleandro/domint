@@ -120,11 +120,47 @@ static void add_seed_file(const char *name)
 
 /* Fragments that make parsers take unusual paths. */
 static const char *const tokens[] = {
-    "{", "}", "[", "]", "\"", "\\", "\\u0000", "\\u001b[2J", "\\ud800", ":", ",", "null", "true", "-1e999",
-    "99999999999999999999", "\r\n", "\r\n\r\n", "\n", "\x1b]0;owned\x07", "\x1b[31m", "%s%n%x", "\xff\xfe",
-    "\xc3", "\xf0\x9f", "HTTP/1.1 ", "HTTP/1.1 100 Continue\r\n\r\n", "<title>", "</title>", "Server: ",
-    "Location: ", "DNS:", "X509v3 Subject Alternative Name:", "\"not_before\":\"", "\"name_value\":\"",
-    "Domain Name: ", "Creation Date: ", "Registrar: ", "Domain Status: ", "|", "\xc0\x0c", "\xc0\x00",
+    "{",
+    "}",
+    "[",
+    "]",
+    "\"",
+    "\\",
+    "\\u0000",
+    "\\u001b[2J",
+    "\\ud800",
+    ":",
+    ",",
+    "null",
+    "true",
+    "-1e999",
+    "99999999999999999999",
+    "\r\n",
+    "\r\n\r\n",
+    "\n",
+    "\x1b]0;owned\x07",
+    "\x1b[31m",
+    "%s%n%x",
+    "\xff\xfe",
+    "\xc3",
+    "\xf0\x9f",
+    "HTTP/1.1 ",
+    "HTTP/1.1 100 Continue\r\n\r\n",
+    "<title>",
+    "</title>",
+    "Server: ",
+    "Location: ",
+    "DNS:",
+    "X509v3 Subject Alternative Name:",
+    "\"not_before\":\"",
+    "\"name_value\":\"",
+    "Domain Name: ",
+    "Creation Date: ",
+    "Registrar: ",
+    "Domain Status: ",
+    "|",
+    "\xc0\x0c",
+    "\xc0\x00",
 };
 
 static void mutate(void)
@@ -390,8 +426,8 @@ static void fuzz_pipeline(void)
     record_observation(obs, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK, NULL, names,
                        strlen(names));
     record_observation(obs, SUBDOMAIN_COLLECTOR, "crt.sh", "example.com", OBS_OK, NULL, input, input_length);
-    record_observation(obs, SUBDOMAIN_PROBE_COLLECTOR, "https://192.0.2.1:443", "www.example.com", OBS_OK, NULL,
-                       input, input_length);
+    record_observation(obs, SUBDOMAIN_PROBE_COLLECTOR, "https://192.0.2.1:443", "www.example.com", OBS_OK, NULL, input,
+                       input_length);
     record_observation(obs, SUBDOMAIN_PROBE_COLLECTOR, (const char *)input, "mail.example.com", OBS_NO_RESPONSE,
                        (const char *)input, NULL, 0);
     record_observation(obs, DNS_COLLECTOR, "192.0.2.53:53", "A old.example.com", OBS_OK, NULL, input, input_length);
@@ -436,14 +472,14 @@ static void fuzz_report_fields(void)
     for (int r = 0; r < 2; r++)
     {
         domain_report *report = &reports[r];
-#define TAKE(field)                                                                              \
-    do                                                                                           \
-    {                                                                                            \
-        size_t n_ = input_length > 0 ? below(sizeof(field)) : 0;                                 \
-        n_ = offset + n_ > input_length ? input_length - offset : n_;                            \
-        memcpy(field, text + offset, n_);                                                        \
-        field[n_ < sizeof(field) ? n_ : sizeof(field) - 1] = '\0';                               \
-        offset = input_length > 0 ? (offset + n_) % input_length : 0;                            \
+#define TAKE(field)                                                                                                    \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        size_t n_ = input_length > 0 ? below(sizeof(field)) : 0;                                                       \
+        n_ = offset + n_ > input_length ? input_length - offset : n_;                                                  \
+        memcpy(field, text + offset, n_);                                                                              \
+        field[n_ < sizeof(field) ? n_ : sizeof(field) - 1] = '\0';                                                     \
+        offset = input_length > 0 ? (offset + n_) % input_length : 0;                                                  \
     } while (0)
 
         const char *name = r == 0 ? "example.com" : "example.org";
@@ -546,10 +582,14 @@ static void fuzz_report_fields(void)
 
 static void load_seeds(void)
 {
-    static const char *const fixtures[] = {"whois_verisign_registered.txt", "whois_verisign_not_found.txt",
-                                           "whois_nominet.txt",             "whois_registro_br.txt",
-                                           "cymru_announced.txt",           "cymru_private.txt",
-                                           "rdap_verisign.json",            "tls_certinfo.txt"};
+    static const char *const fixtures[] = {"whois_verisign_registered.txt",
+                                           "whois_verisign_not_found.txt",
+                                           "whois_nominet.txt",
+                                           "whois_registro_br.txt",
+                                           "cymru_announced.txt",
+                                           "cymru_private.txt",
+                                           "rdap_verisign.json",
+                                           "tls_certinfo.txt"};
 
     for (size_t i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); i++)
     {
@@ -586,10 +626,17 @@ typedef struct
 int main(int argc, char *argv[])
 {
     static const target targets[] = {
-        {"json", fuzz_json, 1},       {"whois", fuzz_whois, 1},           {"rdap", fuzz_rdap, 1},
-        {"asn", fuzz_asn, 1},         {"http", fuzz_http, 1},             {"tls", fuzz_tls, 1},
-        {"dns", fuzz_dns, 1},         {"subdomains", fuzz_subdomain_sources, 1},
-        {"reputation", fuzz_reputation, 1}, {"domain", fuzz_domain, 1},  {"pipeline", fuzz_pipeline, 20},
+        {"json", fuzz_json, 1},
+        {"whois", fuzz_whois, 1},
+        {"rdap", fuzz_rdap, 1},
+        {"asn", fuzz_asn, 1},
+        {"http", fuzz_http, 1},
+        {"tls", fuzz_tls, 1},
+        {"dns", fuzz_dns, 1},
+        {"subdomains", fuzz_subdomain_sources, 1},
+        {"reputation", fuzz_reputation, 1},
+        {"domain", fuzz_domain, 1},
+        {"pipeline", fuzz_pipeline, 20},
         {"report", fuzz_report_fields, 20},
     };
     long iterations = argc > 1 ? strtol(argv[1], NULL, 10) : 20000;
@@ -613,8 +660,7 @@ int main(int argc, char *argv[])
             targets[t].run();
         }
 
-        printf("  %-12s %7ld inputs  ok  (%.1fs)\n", targets[t].name, runs,
-               (double)(clock() - began) / CLOCKS_PER_SEC);
+        printf("  %-12s %7ld inputs  ok  (%.1fs)\n", targets[t].name, runs, (double)(clock() - began) / CLOCKS_PER_SEC);
     }
 
     return 0;

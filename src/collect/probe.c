@@ -41,8 +41,7 @@ static void extract_title(const char *body, char *out, size_t max_size)
 
     while (*p != '\0')
     {
-        if (p[0] == '<' && (p[1] == 't' || p[1] == 'T') &&
-            strncasecmp(p, "<title", 6) == 0)
+        if (p[0] == '<' && (p[1] == 't' || p[1] == 'T') && strncasecmp(p, "<title", 6) == 0)
         {
             const char *gt = strchr(p + 6, '>');
 
@@ -66,8 +65,7 @@ static void extract_title(const char *body, char *out, size_t max_size)
 
     while (*end != '\0')
     {
-        if (end[0] == '<' && (end[1] == '/' || end[1] == ' ') &&
-            strncasecmp(end, "</title", 7) == 0)
+        if (end[0] == '<' && (end[1] == '/' || end[1] == ' ') && strncasecmp(end, "</title", 7) == 0)
         {
             title_end = end;
             break;
@@ -460,8 +458,8 @@ void subdomain_apply_probes(const observation_list *observations, subdomain_list
             continue;
         }
 
-        subdomain_info *sub = bsearch(obs->query, subdomains->items, subdomains->count, sizeof(*subdomains->items),
-                                      compare_name);
+        subdomain_info *sub =
+            bsearch(obs->query, subdomains->items, subdomains->count, sizeof(*subdomains->items), compare_name);
 
         if (sub == NULL || sub->is_live)
         {
@@ -490,11 +488,12 @@ void subdomain_apply_probes(const observation_list *observations, subdomain_list
  * access, admin panels and non-production environments. */
 static int probe_priority(const char *name, const char *domain)
 {
-    static const char *const first[] = {"www", "mail", "webmail", "owa", "autodiscover", "vpn", "remote", "portal",
-                                        "login", "sso", "auth", "admin", "api", "app"};
-    static const char *const keywords[] = {"admin", "vpn", "portal", "intranet", "internal", "corp", "jenkins", "jira",
-                                           "grafana", "gitlab", "git", "kibana", "sso", "login", "auth", "api", "dev",
-                                           "test", "stag", "hml", "homol", "uat", "qa", "sandbox", "beta", "backup"};
+    static const char *const first[] = {"www",    "mail",  "webmail", "owa",  "autodiscover", "vpn", "remote",
+                                        "portal", "login", "sso",     "auth", "admin",        "api", "app"};
+    static const char *const keywords[] = {"admin", "vpn",     "portal",  "intranet", "internal", "corp", "jenkins",
+                                           "jira",  "grafana", "gitlab",  "git",      "kibana",   "sso",  "login",
+                                           "auth",  "api",     "dev",     "test",     "stag",     "hml",  "homol",
+                                           "uat",   "qa",      "sandbox", "beta",     "backup"};
     size_t name_length = strlen(name);
     size_t domain_length = strlen(domain);
 
@@ -564,8 +563,8 @@ static int label_count(const char *name)
     return count;
 }
 
-void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
-                     observation_list *observations, const char *domain)
+void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe, observation_list *observations,
+                     const char *domain)
 {
     if (no_probe)
     {
@@ -678,7 +677,8 @@ void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
     }
 
     char detail[FIELD_SIZE];
-    snprintf(detail, sizeof(detail), "Probed %zu subdomains: %zu online (%zu open 200, %zu restricted 403/401, %zu redirect), %zu offline",
+    snprintf(detail, sizeof(detail),
+             "Probed %zu subdomains: %zu online (%zu open 200, %zu restricted 403/401, %zu redirect), %zu offline",
              to_probe, live_count, code_200, code_403, code_redir, to_probe - live_count);
 
     record_observation(observations, SUBDOMAIN_PROBE_COLLECTOR, "http-probe", domain, OBS_OK, detail, NULL, 0);

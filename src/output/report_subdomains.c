@@ -93,8 +93,8 @@ static void print_shared_addresses(FILE *out, const domain_report *report)
 
 /* Why probing got no answer, in the order the groups are printed; any
  * other reason is listed last as "other errors". */
-static const char *const probe_reasons[] = {"not in DNS", "timed out", "connection refused", "connection reset",
-                                            "TLS handshake failed", "empty reply"};
+static const char *const probe_reasons[] = {
+    "not in DNS", "timed out", "connection refused", "connection reset", "TLS handshake failed", "empty reply"};
 
 /* The probe records "<reason>: <libcurl message>". */
 static size_t reason_index(const subdomain_info *sub)
@@ -232,8 +232,8 @@ static void print_subdomain_table(FILE *out, const domain_report *report)
 
         char line[DOMAIN_SIZE + FIELD_SIZE * 2];
         size_t length = (size_t)snprintf(line, sizeof(line), "    %-5s  %-5s  %-*.*s  %-*s  %s", code_str,
-                                         sub->protocol, name_width, report_short_name(sub->name, report->name), sub->name,
-                                         ip_width, sub->ip, network);
+                                         sub->protocol, name_width, report_short_name(sub->name, report->name),
+                                         sub->name, ip_width, sub->ip, network);
 
         length = length < sizeof(line) ? length : sizeof(line) - 1;
 
@@ -427,8 +427,7 @@ void print_all_subdomains(FILE *out, const domain_report *reports, size_t count,
     {
         if (reports[i].subdomains.count > 0)
         {
-            fprintf(out, "  %s (%zu subdomain%s):\n",
-                    reports[i].name, reports[i].subdomains.count,
+            fprintf(out, "  %s (%zu subdomain%s):\n", reports[i].name, reports[i].subdomains.count,
                     reports[i].subdomains.count == 1 ? "" : "s");
 
             for (size_t j = 0; j < reports[i].subdomains.count; j++)

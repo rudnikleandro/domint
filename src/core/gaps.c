@@ -10,8 +10,8 @@
 #include "collect/subdomain.h"
 #include "core/model.h"
 
-static const char *const labels[GAP_COUNT] = {"addresses",  "network (ASN)", "DNS",            "registration",
-                                              "reputation", "subdomains",    "aliases (CNAME)", "lookalikes"};
+static const char *const labels[GAP_COUNT] = {
+    "addresses", "network (ASN)", "DNS", "registration", "reputation", "subdomains", "aliases (CNAME)", "lookalikes"};
 static const char *const impacts[GAP_COUNT] = {NULL,
                                                "hosting unknown",
                                                "those records are missing",

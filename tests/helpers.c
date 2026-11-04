@@ -8,8 +8,7 @@
 #include "collect/lookalike.h"
 #include "output/report.h"
 
-void add_live(domain_report *report, const char *name, long code, const char *ip, const char *asn,
-                     const char *as_name)
+void add_live(domain_report *report, const char *name, long code, const char *ip, const char *asn, const char *as_name)
 {
     subdomain_list_add(&report->subdomains, name);
 
@@ -56,11 +55,12 @@ char *render(const domain_report *report)
 
 /* A DNS answer for `name` with one record of `type` holding `rdata`. */
 size_t build_answer(unsigned char *out, const char *name, int type, int rcode, const unsigned char *rdata,
-                           size_t rdata_length)
+                    size_t rdata_length)
 {
     size_t n = 0;
-    const unsigned char header[] = {0x00, 0x01, 0x81, (unsigned char)(0x80 | rcode), 0x00, 0x01, 0x00,
-                                    rdata_length > 0 ? 0x01 : 0x00, 0x00, 0x00, 0x00, 0x00};
+    const unsigned char header[] = {0x00, 0x01, 0x81, (unsigned char)(0x80 | rcode),
+                                    0x00, 0x01, 0x00, rdata_length > 0 ? 0x01 : 0x00,
+                                    0x00, 0x00, 0x00, 0x00};
 
     memcpy(out, header, sizeof(header));
     n = sizeof(header);
@@ -82,8 +82,8 @@ size_t build_answer(unsigned char *out, const char *name, int type, int rcode, c
 
     if (rdata_length > 0)
     {
-        const unsigned char answer[] = {0xc0, 0x0c, 0x00, (unsigned char)type, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c,
-                                        0x00, (unsigned char)rdata_length};
+        const unsigned char answer[] = {0xc0, 0x0c, 0x00, (unsigned char)type,        0x00, 0x01, 0x00, 0x00,
+                                        0x01, 0x2c, 0x00, (unsigned char)rdata_length};
         memcpy(out + n, answer, sizeof(answer));
         n += sizeof(answer);
         memcpy(out + n, rdata, rdata_length);
@@ -94,7 +94,7 @@ size_t build_answer(unsigned char *out, const char *name, int type, int rcode, c
 }
 
 void record_lookalike(observation_list *obs, const char *type_name, const char *name, int type, int rcode,
-                             const unsigned char *rdata, size_t rdata_length)
+                      const unsigned char *rdata, size_t rdata_length)
 {
     unsigned char packet[512];
     char query[DOMAIN_SIZE + 8];

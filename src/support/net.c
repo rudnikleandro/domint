@@ -38,8 +38,7 @@ int connect_with_timeout(int sockfd, const struct sockaddr *addr, socklen_t addr
         socklen_t error_len = sizeof(error);
 
         if (poll(&pfd, 1, SOCKET_TIMEOUT_SECONDS * 1000) == 1 &&
-            getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &error_len) == 0 &&
-            error == 0)
+            getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &error_len) == 0 && error == 0)
         {
             result = 0;
         }

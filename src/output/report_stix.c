@@ -51,7 +51,10 @@ static void sha1_block(sha1_context *ctx, const unsigned char *block)
 
     for (int i = 0; i < 80; i++)
     {
-        uint32_t f = i < 20 ? (b & c) | (~b & d) : i < 40 ? b ^ c ^ d : i < 60 ? (b & c) | (b & d) | (c & d) : b ^ c ^ d;
+        uint32_t f = i < 20   ? (b & c) | (~b & d)
+                     : i < 40 ? b ^ c ^ d
+                     : i < 60 ? (b & c) | (b & d) | (c & d)
+                              : b ^ c ^ d;
         uint32_t k = i < 20 ? 0x5a827999 : i < 40 ? 0x6ed9eba1 : i < 60 ? 0x8f1bbcdc : 0xca62c1d6;
         uint32_t temp = rotate(a, 5) + f + e + k + w[i];
 
@@ -184,7 +187,8 @@ typedef struct
 /* Each object is one line of the "objects" array. */
 static void begin_object(bundle *b, const char *type, const char *id)
 {
-    fprintf(b->out, "%s\n    {\"type\": \"%s\", \"spec_version\": \"2.1\", \"id\": \"%s\"", b->first ? "" : ",", type, id);
+    fprintf(b->out, "%s\n    {\"type\": \"%s\", \"spec_version\": \"2.1\", \"id\": \"%s\"", b->first ? "" : ",", type,
+            id);
     b->first = 0;
     string_list_add(&b->refs, id);
 }
@@ -360,7 +364,8 @@ static void write_domain(bundle *b, const domain_report *report)
         snprintf(text, sizeof(text), "Lookalike of %s: %s", report->name, item->name);
         snprintf(description, sizeof(description), "Registered variant (%s) of %s%s%s%s.", item->technique,
                  report->name, item->has_mail ? "; it can receive mail" : "",
-                 item->addresses.count > 0 ? "; it points to a server" : "", item->parked ? "; parked or for sale" : "");
+                 item->addresses.count > 0 ? "; it points to a server" : "",
+                 item->parked ? "; parked or for sale" : "");
         indicator(b, text, description, "anomalous-activity", item->name);
     }
 

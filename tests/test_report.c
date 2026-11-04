@@ -179,8 +179,8 @@ static void test_gaps(void)
     report.subdomain_status = LOOKUP_OK;
     record_observation(&report.observations, "rdap", "rdap.example", "example.com", OBS_NO_RESPONSE,
                        "Operation timed out after 15000 milliseconds", NULL, 0);
-    record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "crt.sh", "example.com", OBS_ERROR, "HTTP 502",
-                       NULL, 0);
+    record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "crt.sh", "example.com", OBS_ERROR, "HTTP 502", NULL,
+                       0);
     record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "otx.alienvault.com", "example.com", OBS_LIMITED,
                        "HTTP 429", NULL, 0);
     record_observation(&report.observations, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK,
@@ -202,8 +202,9 @@ static void test_gaps(void)
  * characters: an OTX pulse anyone can create, an RDAP escape, a C1 CSI. */
 static void test_terminal_escapes(void)
 {
-    const char *otx = "{\"pulse_info\":{\"count\":1,\"pulses\":[{\"name\":\"x\\u001b]0;owned\\u0007\\u001b[2J\\nnext\"}]},"
-                      "\"validation\":[]}";
+    const char *otx =
+        "{\"pulse_info\":{\"count\":1,\"pulses\":[{\"name\":\"x\\u001b]0;owned\\u0007\\u001b[2J\\nnext\"}]},"
+        "\"validation\":[]}";
     const char *rdap_name = "{\"name\":\"Owner\\u001b[31m\\u009b2J\"}";
     reputation_info info = {0};
 
@@ -214,7 +215,8 @@ static void test_terminal_escapes(void)
     CHECK_STR(json_get_string(doc, "name"), "Owner?[31m??2J");
     json_free(doc);
 
-    char text[] = "a\xc2\x9b" "31m b\xc3\xa9 \x1b[0m\r\n";
+    char text[] = "a\xc2\x9b"
+                  "31m b\xc3\xa9 \x1b[0m\r\n";
     sanitize_text(text, strlen(text), 1);
     CHECK_STR(text, "a??31m b\xc3\xa9 ?[0m\r\n");
 

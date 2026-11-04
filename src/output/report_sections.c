@@ -29,7 +29,8 @@ void describe_reputation(const reputation_info *rep, char *out, size_t size)
 
         if (rep->threatfox_iocs > 0)
         {
-            snprintf(part, sizeof(part), "ThreatFox (%ld IOC%s)", rep->threatfox_iocs, rep->threatfox_iocs == 1 ? "" : "s");
+            snprintf(part, sizeof(part), "ThreatFox (%ld IOC%s)", rep->threatfox_iocs,
+                     rep->threatfox_iocs == 1 ? "" : "s");
             report_append(listed, sizeof(listed), "; ", part);
         }
     }
@@ -123,8 +124,9 @@ void print_reputation(FILE *out, const domain_report *report)
 
     if (rep->threatfox_not_queried && rep->urlhaus_not_queried)
     {
-        print_field(out, "abuse.ch", "URLhaus and ThreatFox not queried: set ABUSECH_AUTH_KEY (free key at "
-                                     "https://auth.abuse.ch)");
+        print_field(out, "abuse.ch",
+                    "URLhaus and ThreatFox not queried: set ABUSECH_AUTH_KEY (free key at "
+                    "https://auth.abuse.ch)");
     }
     else
     {
@@ -194,7 +196,8 @@ void print_lookalikes(FILE *out, const domain_report *report)
         return;
     }
 
-    fprintf(out, "  %zu variants checked; %zu registered%s\n", list->checked, list->count, list->count > 0 ? ":\n" : ".");
+    fprintf(out, "  %zu variants checked; %zu registered%s\n", list->checked, list->count,
+            list->count > 0 ? ":\n" : ".");
 
     for (size_t i = 0; i < list->count; i++)
     {
@@ -207,7 +210,7 @@ void print_lookalikes(FILE *out, const domain_report *report)
     for (size_t i = 0; i < list->count; i++)
     {
         const lookalike_info *item = &list->items[i];
-        const char *nameserver = item->dns_fails             ? "(its DNS does not answer)"
+        const char *nameserver = item->dns_fails               ? "(its DNS does not answer)"
                                  : item->nameservers.count > 0 ? item->nameservers.items[0]
                                                                : "-";
         char line[DOMAIN_SIZE * 3];
@@ -296,8 +299,8 @@ void describe_certificate(const tls_info *tls, char *out, size_t size)
 
         gmtime_r(&until, &parts);
         strftime(date, sizeof(date), "%Y-%m-%d", &parts);
-        snprintf(out, size, "%.200s, %s %s (%ld day%s)%s", issuer, days < 0 ? "expired" : "expires", date, days < 0 ? -days : days,
-                 (days == 1 || days == -1) ? "" : "s", tls->trusted ? "" : ", not trusted");
+        snprintf(out, size, "%.200s, %s %s (%ld day%s)%s", issuer, days < 0 ? "expired" : "expires", date,
+                 days < 0 ? -days : days, (days == 1 || days == -1) ? "" : "s", tls->trusted ? "" : ", not trusted");
     }
     else
     {
@@ -426,8 +429,8 @@ static void print_dnssec(FILE *out, const dns_info *dns)
     }
     else if (dns->ds.values.count == 0)
     {
-        print_field(out, "DNSSEC", dns->dnskey.values.count > 0 ? "not signed at the parent (DNSKEY present, no DS)"
-                                                                 : "not signed");
+        print_field(out, "DNSSEC",
+                    dns->dnskey.values.count > 0 ? "not signed at the parent (DNSKEY present, no DS)" : "not signed");
     }
     else if (dns->dnskey.values.count == 0)
     {
@@ -459,7 +462,8 @@ void print_dns(FILE *out, const domain_report *report)
         {
             const char *entry = dns->mx.values.items[i];
 
-            snprintf(text, sizeof(text), "%-4u%s", mx_priority(entry), mx_is_null(entry) ? ". (null MX: accepts no mail)" : mx_host(entry));
+            snprintf(text, sizeof(text), "%-4u%s", mx_priority(entry),
+                     mx_is_null(entry) ? ". (null MX: accepts no mail)" : mx_host(entry));
             print_field(out, i == 0 ? "MX" : "", text);
         }
     }
@@ -613,9 +617,9 @@ static void print_source(FILE *out, const observation *item)
     char asked[FIELD_SIZE * 2];
     char source[FIELD_SIZE + 32];
     int probe = strcmp(item->collector, SUBDOMAIN_PROBE_COLLECTOR) == 0;
-    int reached_target = (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0 ||
-                          probe) &&
-                         item->status != OBS_NOT_QUERIED;
+    int reached_target =
+        (strcmp(item->collector, HTTP_COLLECTOR) == 0 || strcmp(item->collector, TLS_COLLECTOR) == 0 || probe) &&
+        item->status != OBS_NOT_QUERIED;
 
     snprintf(asked, sizeof(asked), "%s %s", item->collector, item->query);
     snprintf(source, sizeof(source), "%s%s", item->source, reached_target ? " (target, from your IP)" : "");

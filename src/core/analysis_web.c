@@ -22,9 +22,10 @@ void analyze_web(domain_report *report)
 
     if (slash != NULL && isdigit((unsigned char)slash[1]))
     {
-        add_finding(report, SEVERITY_LOW,
-                    "The web server announces its version (%s), which makes it easy to match against known vulnerabilities.",
-                    http->server);
+        add_finding(
+            report, SEVERITY_LOW,
+            "The web server announces its version (%s), which makes it easy to match against known vulnerabilities.",
+            http->server);
     }
 
     char host[DOMAIN_SIZE];
@@ -113,8 +114,10 @@ void analyze_certificate_names(domain_report *report)
             strncat(list, others.items[i], sizeof(list) - strlen(list) - 1);
         }
 
-        add_finding(report, SEVERITY_INFO, "The TLS certificate also covers %zu other domain%s, a lead to related "
-                    "infrastructure: %s.", others.count, others.count == 1 ? "" : "s", list);
+        add_finding(report, SEVERITY_INFO,
+                    "The TLS certificate also covers %zu other domain%s, a lead to related "
+                    "infrastructure: %s.",
+                    others.count, others.count == 1 ? "" : "s", list);
     }
 
     string_list_free(&others);

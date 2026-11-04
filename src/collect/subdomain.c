@@ -49,9 +49,8 @@ static void add_candidate(string_list *names, const char *candidate, const char 
 
     size_t len = strlen(buffer);
 
-    while (len > 0 && (buffer[len - 1] == ' ' || buffer[len - 1] == '\t' ||
-                       buffer[len - 1] == '\r' || buffer[len - 1] == '\n' ||
-                       buffer[len - 1] == '.'))
+    while (len > 0 && (buffer[len - 1] == ' ' || buffer[len - 1] == '\t' || buffer[len - 1] == '\r' ||
+                       buffer[len - 1] == '\n' || buffer[len - 1] == '.'))
     {
         buffer[--len] = '\0';
     }
@@ -314,8 +313,8 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
 
         if (res == 0)
         {
-            snprintf(detail, sizeof(detail), "%zu subdomain%s discovered in Certificate Transparency logs",
-                     temp.count, temp.count == 1 ? "" : "s");
+            snprintf(detail, sizeof(detail), "%zu subdomain%s discovered in Certificate Transparency logs", temp.count,
+                     temp.count == 1 ? "" : "s");
         }
         else
         {
@@ -334,8 +333,8 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
         snprintf(detail, sizeof(detail), "%s", crtsh.error[0] != '\0' ? crtsh.error : "query failed");
     }
 
-    record_observation(observations, SUBDOMAIN_COLLECTOR, "crt.sh", domain,
-                       crtsh.status, detail, crtsh.data, crtsh.length);
+    record_observation(observations, SUBDOMAIN_COLLECTOR, "crt.sh", domain, crtsh.status, detail, crtsh.data,
+                       crtsh.length);
     free(crtsh.data);
 
     /* 2. AlienVault OTX Passive DNS */
@@ -350,8 +349,8 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
 
         if (res == 0)
         {
-            snprintf(detail, sizeof(detail), "%zu subdomain%s discovered in AlienVault passive DNS",
-                     temp.count, temp.count == 1 ? "" : "s");
+            snprintf(detail, sizeof(detail), "%zu subdomain%s discovered in AlienVault passive DNS", temp.count,
+                     temp.count == 1 ? "" : "s");
         }
         else
         {
@@ -366,8 +365,8 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
         snprintf(detail, sizeof(detail), "%s", otx.error[0] != '\0' ? otx.error : "query failed");
     }
 
-    record_observation(observations, SUBDOMAIN_COLLECTOR, "otx.alienvault.com", domain,
-                       otx.status, detail, otx.data, otx.length);
+    record_observation(observations, SUBDOMAIN_COLLECTOR, "otx.alienvault.com", domain, otx.status, detail, otx.data,
+                       otx.length);
     free(otx.data);
 
     /* 3. HackerTarget Host Search */
@@ -382,8 +381,8 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
 
         if (res == 0)
         {
-            snprintf(detail, sizeof(detail), "%zu subdomain%s discovered in HackerTarget host search",
-                     temp.count, temp.count == 1 ? "" : "s");
+            snprintf(detail, sizeof(detail), "%zu subdomain%s discovered in HackerTarget host search", temp.count,
+                     temp.count == 1 ? "" : "s");
         }
         else
         {
@@ -398,8 +397,8 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
         snprintf(detail, sizeof(detail), "%s", ht.error[0] != '\0' ? ht.error : "query failed");
     }
 
-    record_observation(observations, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", domain,
-                       ht.status, detail, ht.data, ht.length);
+    record_observation(observations, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", domain, ht.status, detail, ht.data,
+                       ht.length);
     free(ht.data);
 }
 
@@ -430,8 +429,7 @@ void subdomain_ct_first_seen(const observation_list *observations, const char *d
 
             size_t length = strcspn(p, "\"");
 
-            if (length >= 10 && length < sizeof(earliest) &&
-                (earliest[0] == '\0' || strncmp(p, earliest, length) < 0))
+            if (length >= 10 && length < sizeof(earliest) && (earliest[0] == '\0' || strncmp(p, earliest, length) < 0))
             {
                 memcpy(earliest, p, length);
                 earliest[length] = '\0';
@@ -444,8 +442,8 @@ void subdomain_ct_first_seen(const observation_list *observations, const char *d
     }
 }
 
-void subdomain_interpret(const char *domain, const observation_list *observations,
-                         subdomain_list *subdomains, lookup_status *status)
+void subdomain_interpret(const char *domain, const observation_list *observations, subdomain_list *subdomains,
+                         lookup_status *status)
 {
     subdomain_list_free(subdomains);
 

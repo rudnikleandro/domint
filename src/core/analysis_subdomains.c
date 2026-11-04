@@ -33,8 +33,8 @@ static int subdomain_prefix(const char *name, const char *domain, char *out, siz
  * keyword ("dev", "qa") or containing a long one ("homol-api"). */
 static int is_non_production(const char *name, const char *domain)
 {
-    static const char *const exact[] = {"dev", "develop", "development", "test", "testing", "tst", "qa",
-                                        "uat", "hml", "hom", "stg", "stage", "lab", "demo", "beta", "sandbox"};
+    static const char *const exact[] = {"dev", "develop", "development", "test",  "testing", "tst",  "qa",   "uat",
+                                        "hml", "hom",     "stg",         "stage", "lab",     "demo", "beta", "sandbox"};
     static const char *const partial[] = {"staging", "stagging", "homolog", "homol", "preprod", "sandbox"};
     char prefix[DOMAIN_SIZE];
 
@@ -135,8 +135,9 @@ static void analyze_non_production(domain_report *report)
     }
     else
     {
-        add_finding(report, SEVERITY_INFO, "%zu non-production environment name%s (dev/test/homologation) in public records: %s.",
-                    found, found == 1 ? "" : "s", list);
+        add_finding(report, SEVERITY_INFO,
+                    "%zu non-production environment name%s (dev/test/homologation) in public records: %s.", found,
+                    found == 1 ? "" : "s", list);
     }
 }
 
@@ -144,8 +145,7 @@ static void analyze_non_production(domain_report *report)
  * no site for: the DNS record still points at the CDN, nothing is served. */
 static int is_edge_only(const subdomain_info *sub)
 {
-    return sub->probed && sub->is_live &&
-           (sub->http_code == 400 || sub->http_code == 409 || sub->http_code == 421) &&
+    return sub->probed && sub->is_live && (sub->http_code == 400 || sub->http_code == 409 || sub->http_code == 421) &&
            proxy_provider_name(sub->as_name) != NULL;
 }
 
@@ -154,13 +154,34 @@ static int is_edge_only(const subdomain_info *sub)
 static int is_claimable(const char *target)
 {
     static const char *const suffixes[] = {
-        ".azurewebsites.net", ".cloudapp.net",      ".cloudapp.azure.com", ".trafficmanager.net",
-        ".blob.core.windows.net", ".azureedge.net", ".azurefd.net",        ".herokuapp.com",
-        ".herokudns.com",     ".github.io",         ".s3.amazonaws.com",   ".elasticbeanstalk.com",
-        ".cloudfront.net",    ".netlify.app",       ".pantheonsite.io",    ".myshopify.com",
-        ".zendesk.com",       ".ghost.io",          ".surge.sh",           ".bitbucket.io",
-        ".readthedocs.io",    ".statuspage.io",     ".helpscoutdocs.com",  ".wordpress.com",
-        ".fly.dev",           ".vercel.app",        ".firebaseapp.com",    ".web.app",
+        ".azurewebsites.net",
+        ".cloudapp.net",
+        ".cloudapp.azure.com",
+        ".trafficmanager.net",
+        ".blob.core.windows.net",
+        ".azureedge.net",
+        ".azurefd.net",
+        ".herokuapp.com",
+        ".herokudns.com",
+        ".github.io",
+        ".s3.amazonaws.com",
+        ".elasticbeanstalk.com",
+        ".cloudfront.net",
+        ".netlify.app",
+        ".pantheonsite.io",
+        ".myshopify.com",
+        ".zendesk.com",
+        ".ghost.io",
+        ".surge.sh",
+        ".bitbucket.io",
+        ".readthedocs.io",
+        ".statuspage.io",
+        ".helpscoutdocs.com",
+        ".wordpress.com",
+        ".fly.dev",
+        ".vercel.app",
+        ".firebaseapp.com",
+        ".web.app",
     };
     size_t length = strlen(target);
 
@@ -180,8 +201,8 @@ static int is_claimable(const char *target)
 /* Short names ("www", "dev.api") of the subdomains `match` picks, joined
  * with ", " and cut with "..." when they do not fit. With `arrows`, each
  * is followed by " -> <alias target>". Returns how many matched. */
-static size_t join_subdomains(const domain_report *report, int (*match)(const subdomain_info *), int arrows,
-                              char *out, size_t size)
+static size_t join_subdomains(const domain_report *report, int (*match)(const subdomain_info *), int arrows, char *out,
+                              size_t size)
 {
     size_t count = 0;
     size_t length = 0;
@@ -317,10 +338,8 @@ void analyze_subdomains(domain_report *report)
 
     analyze_stale_records(report);
 
-    static const char *const sensitive_keywords[] = {
-        "vpn", "admin", "internal",
-        "corp", "portal", "cpanel", "jenkins", "jira", "grafana", "gitlab"
-    };
+    static const char *const sensitive_keywords[] = {"vpn",    "admin",   "internal", "corp",    "portal",
+                                                     "cpanel", "jenkins", "jira",     "grafana", "gitlab"};
 
     string_list sensitive = {0};
 
@@ -332,8 +351,7 @@ void analyze_subdomains(domain_report *report)
         {
             if (strstr(sub->title, "Index of /") != NULL || strstr(sub->title, "Directory Listing") != NULL)
             {
-                add_finding(report, SEVERITY_HIGH,
-                            "Subdomain exposes open directory listing: %s (Title: \"%s\").",
+                add_finding(report, SEVERITY_HIGH, "Subdomain exposes open directory listing: %s (Title: \"%s\").",
                             sub->name, sub->title);
             }
         }
@@ -365,7 +383,8 @@ void analyze_subdomains(domain_report *report)
                         }
 
                         add_finding(report, SEVERITY_MEDIUM,
-                                    "Sensitive subdomain is actively online and accessible without restriction: %s (HTTP 200 OK%s).",
+                                    "Sensitive subdomain is actively online and accessible without restriction: %s "
+                                    "(HTTP 200 OK%s).",
                                     sub->name, extra);
                     }
                     else if (sub->http_code == 401 || sub->http_code == 403)
@@ -377,8 +396,8 @@ void analyze_subdomains(domain_report *report)
                     else if (sub->http_code >= 300 && sub->http_code < 400 && sub->location[0] != '\0')
                     {
                         add_finding(report, SEVERITY_INFO,
-                                    "Sensitive subdomain is online and redirects: %s (HTTP %ld -> %s).",
-                                    sub->name, sub->http_code, sub->location);
+                                    "Sensitive subdomain is online and redirects: %s (HTTP %ld -> %s).", sub->name,
+                                    sub->http_code, sub->location);
                     }
                 }
                 else if (!sub->probed)
@@ -414,9 +433,10 @@ void analyze_subdomains(domain_report *report)
 
         if (any_probed)
         {
-            add_finding(report, SEVERITY_LOW,
-                        "Potentially sensitive or internal subdomains over the probe limit, not checked (%zu found: %s).",
-                        sensitive.count, sample);
+            add_finding(
+                report, SEVERITY_LOW,
+                "Potentially sensitive or internal subdomains over the probe limit, not checked (%zu found: %s).",
+                sensitive.count, sample);
         }
         else
         {

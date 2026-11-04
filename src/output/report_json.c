@@ -537,9 +537,14 @@ void print_report_json(FILE *out, const domain_report *reports, size_t count, co
     {
         unsigned bit;
         const char *name;
-    } module_names[] = {{MODULE_ADDRESSES, "addresses"}, {MODULE_DNS, "dns"},       {MODULE_WHOIS, "whois"},
-                        {MODULE_TLS, "tls"},             {MODULE_HTTP, "http"},     {MODULE_SUBDOMAINS, "subdomains"},
-                        {MODULE_REPUTATION, "reputation"}, {MODULE_LOOKALIKES, "lookalikes"}};
+    } module_names[] = {{MODULE_ADDRESSES, "addresses"},
+                        {MODULE_DNS, "dns"},
+                        {MODULE_WHOIS, "whois"},
+                        {MODULE_TLS, "tls"},
+                        {MODULE_HTTP, "http"},
+                        {MODULE_SUBDOMAINS, "subdomains"},
+                        {MODULE_REPUTATION, "reputation"},
+                        {MODULE_LOOKALIKES, "lookalikes"}};
     static const char *const strengths[] = {"weak", "medium", "strong"};
     writer w = {out, 0, {1}};
     unsigned modules = options->modules != 0 ? options->modules : MODULE_DEFAULT;

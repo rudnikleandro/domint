@@ -154,7 +154,8 @@ static void collect_pivots(const domain_report *reports, size_t count, pivot_lis
 
         for (size_t i = 0; i < dns->ns.values.count; i++)
         {
-            add_pivot(pivots, nameserver_strength(dns->ns.values.items[i]), KIND_NAMESERVER, dns->ns.values.items[i], d);
+            add_pivot(pivots, nameserver_strength(dns->ns.values.items[i]), KIND_NAMESERVER, dns->ns.values.items[i],
+                      d);
         }
 
         for (size_t i = 0; i < dns->mx.values.count; i++)

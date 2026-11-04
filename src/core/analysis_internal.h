@@ -18,8 +18,7 @@
 
 /* Appends a signal to the report, or drops the least severe one to make
  * room for it when the list is full. */
-void add_finding(domain_report *report, severity level, const char *format, ...)
-    __attribute__((format(printf, 3, 4)));
+void add_finding(domain_report *report, severity level, const char *format, ...) __attribute__((format(printf, 3, 4)));
 
 /* One per area; each adds its signals to the report. */
 void analyze_registration(domain_report *report, time_t now);

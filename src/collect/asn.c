@@ -121,8 +121,7 @@ void asn_parse(char *response, address_info *address)
 
         char *saveptr;
 
-        for (char *token = strtok_r(data_line, "|", &saveptr);
-             token != NULL && field_count < CYMRU_FIELD_COUNT;
+        for (char *token = strtok_r(data_line, "|", &saveptr); token != NULL && field_count < CYMRU_FIELD_COUNT;
              token = strtok_r(NULL, "|", &saveptr))
         {
             trim_spaces(token);

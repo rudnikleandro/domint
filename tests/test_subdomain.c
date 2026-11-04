@@ -227,10 +227,10 @@ static void test_sensitive_over_probe_limit(void)
 /* An address query for iam.example.com answered NXDOMAIN with the alias
  * to a deleted Azure app: the shape of a takeover candidate. */
 static const unsigned char dangling_packet[] = {
-    0x00, 0x01, 0x81, 0x83, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-    3, 'i', 'a', 'm', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x00, 0x01, 0x00, 0x01,
-    0xc0, 0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x15,
-    1, 'x', 13, 'a', 'z', 'u', 'r', 'e', 'w', 'e', 'b', 's', 'i', 't', 'e', 's', 3, 'n', 'e', 't', 0,
+    0x00, 0x01, 0x81, 0x83, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 3,    'i',  'a',  'm',  7,
+    'e',  'x',  'a',  'm',  'p',  'l',  'e',  3,    'c',  'o',  'm',  0,    0x00, 0x01, 0x00, 0x01, 0xc0,
+    0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x15, 1,    'x',  13,   'a',  'z',  'u',
+    'r',  'e',  'w',  'e',  'b',  's',  'i',  't',  'e',  's',  3,    'n',  'e',  't',  0,
 };
 
 /* Aliases, CDN edges, certificate names and CT dates turn into signals. */
@@ -340,11 +340,10 @@ void test_subdomains(void)
     subdomain_list_free(&list);
 
     /* 3. HackerTarget parsing test */
-    const char *ht_sample =
-        "mail.example.com,192.0.2.1\n"
-        "vpn.example.com,192.0.2.2\n"
-        "example.com,192.0.2.3\n"
-        "badsite.com,192.0.2.4\n";
+    const char *ht_sample = "mail.example.com,192.0.2.1\n"
+                            "vpn.example.com,192.0.2.2\n"
+                            "example.com,192.0.2.3\n"
+                            "badsite.com,192.0.2.4\n";
 
     CHECK_INT(subdomain_parse_hackertarget(ht_sample, "example.com", &list), 0);
     subdomain_list_sort(&list);
@@ -368,12 +367,12 @@ void test_subdomains(void)
     observation_list obs = {0};
     lookup_status status;
 
-    record_observation(&obs, SUBDOMAIN_COLLECTOR, "crt.sh", "example.com", OBS_OK, "ok",
-                       crtsh_sample, strlen(crtsh_sample));
-    record_observation(&obs, SUBDOMAIN_COLLECTOR, "otx.alienvault.com", "example.com", OBS_OK, "ok",
-                       otx_sample, strlen(otx_sample));
-    record_observation(&obs, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK, "ok",
-                       ht_sample, strlen(ht_sample));
+    record_observation(&obs, SUBDOMAIN_COLLECTOR, "crt.sh", "example.com", OBS_OK, "ok", crtsh_sample,
+                       strlen(crtsh_sample));
+    record_observation(&obs, SUBDOMAIN_COLLECTOR, "otx.alienvault.com", "example.com", OBS_OK, "ok", otx_sample,
+                       strlen(otx_sample));
+    record_observation(&obs, SUBDOMAIN_COLLECTOR, "api.hackertarget.com", "example.com", OBS_OK, "ok", ht_sample,
+                       strlen(ht_sample));
 
     subdomain_interpret("example.com", &obs, &list, &status);
 
@@ -442,18 +441,15 @@ void test_subdomains(void)
 
     for (size_t i = 0; i < report.finding_count; i++)
     {
-        if (strstr(report.findings[i].text, "directory listing") != NULL &&
-            report.findings[i].level == SEVERITY_HIGH)
+        if (strstr(report.findings[i].text, "directory listing") != NULL && report.findings[i].level == SEVERITY_HIGH)
         {
             found_high = 1;
         }
-        if (strstr(report.findings[i].text, "dev.example.com") != NULL &&
-            report.findings[i].level == SEVERITY_MEDIUM)
+        if (strstr(report.findings[i].text, "dev.example.com") != NULL && report.findings[i].level == SEVERITY_MEDIUM)
         {
             found_medium = 1;
         }
-        if (strstr(report.findings[i].text, "admin.example.com") != NULL &&
-            report.findings[i].level == SEVERITY_LOW)
+        if (strstr(report.findings[i].text, "admin.example.com") != NULL && report.findings[i].level == SEVERITY_LOW)
         {
             found_low = 1;
         }

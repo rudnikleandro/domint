@@ -52,8 +52,9 @@ void analyze_reputation(domain_report *report)
     if (rep->threatfox_status == LOOKUP_OK && rep->threatfox_iocs > 0)
     {
         join_list(&rep->threatfox_malware, names, sizeof(names));
-        add_finding(report, SEVERITY_HIGH, "ThreatFox lists this domain as an indicator of compromise (%ld entr%s%s%s).",
-                    rep->threatfox_iocs, rep->threatfox_iocs == 1 ? "y" : "ies", names[0] != '\0' ? ": " : "", names);
+        add_finding(report, SEVERITY_HIGH,
+                    "ThreatFox lists this domain as an indicator of compromise (%ld entr%s%s%s).", rep->threatfox_iocs,
+                    rep->threatfox_iocs == 1 ? "y" : "ies", names[0] != '\0' ? ": " : "", names);
     }
 
     if (rep->urlhaus_status == LOOKUP_OK && rep->urlhaus_urls > 0)
@@ -117,10 +118,10 @@ static int shares_infrastructure(const domain_report *report, const lookalike_in
  * held for resale, not set up for a campaign. */
 static int is_parking(const lookalike_info *item)
 {
-    static const char *const markers[] = {"afternic",    "namefind",   "parklogic",   "abovedomains", "above.com",
-                                          "sedoparking", "bodis",      "dyna-ns",     "namebrightdns", "parkingcrew",
-                                          "hugedomains", "dan.com",    "uniregistry", "fabulous.com", "parking",
-                                          "domainmarket", "undeveloped", "cashparking", "voodoo.com",  "smartname"};
+    static const char *const markers[] = {"afternic",     "namefind",    "parklogic",   "abovedomains",  "above.com",
+                                          "sedoparking",  "bodis",       "dyna-ns",     "namebrightdns", "parkingcrew",
+                                          "hugedomains",  "dan.com",     "uniregistry", "fabulous.com",  "parking",
+                                          "domainmarket", "undeveloped", "cashparking", "voodoo.com",    "smartname"};
 
     for (size_t i = 0; i < item->nameservers.count; i++)
     {

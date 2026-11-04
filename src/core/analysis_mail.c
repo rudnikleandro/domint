@@ -122,7 +122,8 @@ void analyze_email(domain_report *report)
 
     if (dns->txt.status != LOOKUP_OK)
     {
-        add_finding(report, SEVERITY_INFO, "The TXT lookup failed, so SPF and verification tokens could not be checked.");
+        add_finding(report, SEVERITY_INFO,
+                    "The TXT lookup failed, so SPF and verification tokens could not be checked.");
     }
     else
     {
@@ -145,9 +146,10 @@ void analyze_email(domain_report *report)
              * spoofing gap. */
             if (!dmarc_enforced)
             {
-                add_finding(report, handles_mail ? SEVERITY_MEDIUM : SEVERITY_LOW,
-                            "No SPF record and no enforcing DMARC policy: nothing stops others from sending mail as @%s.",
-                            report->name);
+                add_finding(
+                    report, handles_mail ? SEVERITY_MEDIUM : SEVERITY_LOW,
+                    "No SPF record and no enforcing DMARC policy: nothing stops others from sending mail as @%s.",
+                    report->name);
             }
         }
         else if (spf_count > 1)
@@ -166,16 +168,19 @@ void analyze_email(domain_report *report)
             }
             else if (qualifier == '?')
             {
-                add_finding(report, SEVERITY_MEDIUM, "SPF ends in ?all (neutral), which neither authorizes nor rejects anyone.");
+                add_finding(report, SEVERITY_MEDIUM,
+                            "SPF ends in ?all (neutral), which neither authorizes nor rejects anyone.");
             }
             else if (qualifier == '~' && !dmarc_enforced)
             {
                 add_finding(report, SEVERITY_LOW,
-                            "SPF ends in ~all (softfail) with no enforcing DMARC policy behind it: spoofed mail is usually still delivered.");
+                            "SPF ends in ~all (softfail) with no enforcing DMARC policy behind it: spoofed mail is "
+                            "usually still delivered.");
             }
             else if (qualifier == 0 && !contains_ci(spf, "redirect="))
             {
-                add_finding(report, SEVERITY_LOW, "SPF has no \"all\" mechanism, so mail from unlisted servers is not rejected.");
+                add_finding(report, SEVERITY_LOW,
+                            "SPF has no \"all\" mechanism, so mail from unlisted servers is not rejected.");
             }
         }
     }
@@ -191,6 +196,7 @@ void analyze_email(domain_report *report)
     }
     else if (strcasecmp(policy, "none") == 0)
     {
-        add_finding(report, SEVERITY_LOW, "DMARC is in monitoring mode (p=none): mail that fails authentication is still delivered.");
+        add_finding(report, SEVERITY_LOW,
+                    "DMARC is in monitoring mode (p=none): mail that fails authentication is still delivered.");
     }
 }

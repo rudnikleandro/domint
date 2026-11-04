@@ -29,20 +29,20 @@ typedef struct
 typedef struct
 {
     char name[DOMAIN_SIZE];
-    int probed;            /* 1 if probed for HTTP liveness, 0 otherwise */
-    int is_live;           /* 1 if responded to HTTP/HTTPS, 0 if unreachable */
-    long http_code;        /* e.g. 200, 403, 301, 404, 500, or 0 */
-    char protocol[8];      /* "https" or "http" */
-    char ip[IP_SIZE];      /* IP address connected to */
-    char asn[16];          /* network announcing `ip`, from Team Cymru */
+    int probed;       /* 1 if probed for HTTP liveness, 0 otherwise */
+    int is_live;      /* 1 if responded to HTTP/HTTPS, 0 if unreachable */
+    long http_code;   /* e.g. 200, 403, 301, 404, 500, or 0 */
+    char protocol[8]; /* "https" or "http" */
+    char ip[IP_SIZE]; /* IP address connected to */
+    char asn[16];     /* network announcing `ip`, from Team Cymru */
     char as_name[FIELD_SIZE];
-    char location[256];    /* Location header for redirects */
-    char server[FIELD_SIZE];/* Server banner header */
-    char title[FIELD_SIZE]; /* HTML <title> tag content */
-    char error[FIELD_SIZE];/* Error message if unreachable */
-    char cname[DOMAIN_SIZE];  /* alias target, from a CNAME lookup */
-    int cname_dangling;       /* the alias target does not exist (NXDOMAIN) */
-    int edge_only;            /* a CDN answers for the name but serves no site for it */
+    char location[256];      /* Location header for redirects */
+    char server[FIELD_SIZE]; /* Server banner header */
+    char title[FIELD_SIZE];  /* HTML <title> tag content */
+    char error[FIELD_SIZE];  /* Error message if unreachable */
+    char cname[DOMAIN_SIZE]; /* alias target, from a CNAME lookup */
+    int cname_dangling;      /* the alias target does not exist (NXDOMAIN) */
+    int edge_only;           /* a CDN answers for the name but serves no site for it */
 } subdomain_info;
 
 /* How a subdomain ended up, for the report and the JSON output. */
@@ -153,13 +153,13 @@ typedef struct
 typedef struct
 {
     char name[DOMAIN_SIZE];
-    const char *technique;  /* how it was made: "homoglyph", "tld-swap"... */
-    int dns_fails;          /* registered, but its nameservers do not answer */
+    const char *technique; /* how it was made: "homoglyph", "tld-swap"... */
+    int dns_fails;         /* registered, but its nameservers do not answer */
     string_list nameservers;
     string_list addresses;
-    int has_mail;           /* it has MX records: it can receive mail */
-    int likely_defensive;   /* same nameservers or addresses as the domain */
-    int parked;             /* served by a parking or domain-sale service */
+    int has_mail;         /* it has MX records: it can receive mail */
+    int likely_defensive; /* same nameservers or addresses as the domain */
+    int parked;           /* served by a parking or domain-sale service */
 } lookalike_info;
 
 typedef struct

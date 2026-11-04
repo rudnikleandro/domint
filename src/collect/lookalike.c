@@ -76,9 +76,9 @@ static void add_variant(candidate_set *set, const char *label, const char *techn
 static const char *neighbours(char c)
 {
     static const char *const letters[26] = {
-        "qwsz", "vghn", "xdfv", "erfcxs", "wrsd", "rtgvcd", "tyhbvf", "yujnbg", "uojk", "uikmnh", "iolmj", "opk",
-        "njk",  "bhjm", "iplk", "ol",     "wa",   "etdf",   "weadzx", "ryfg",   "yihj", "cfgb",   "qeas",  "zsdc",
-        "tugh", "asx",
+        "qwsz",   "vghn",  "xdfv", "erfcxs", "wrsd", "rtgvcd", "tyhbvf", "yujnbg", "uojk",
+        "uikmnh", "iolmj", "opk",  "njk",    "bhjm", "iplk",   "ol",     "wa",     "etdf",
+        "weadzx", "ryfg",  "yihj", "cfgb",   "qeas", "zsdc",   "tugh",   "asx",
     };
     static const char *const digits[10] = {"9p", "2q", "13w", "24e", "35r", "46t", "57y", "68u", "79i", "80o"};
 
@@ -92,18 +92,17 @@ static const char *neighbours(char c)
 
 /* Characters that read alike in most fonts, both ways. */
 static const char *const homoglyphs[][2] = {
-    {"o", "0"}, {"0", "o"}, {"l", "1"}, {"1", "l"}, {"i", "1"}, {"i", "l"}, {"l", "i"}, {"m", "rn"},
+    {"o", "0"},  {"0", "o"},  {"l", "1"},  {"1", "l"},  {"i", "1"},  {"i", "l"}, {"l", "i"}, {"m", "rn"},
     {"rn", "m"}, {"w", "vv"}, {"vv", "w"}, {"d", "cl"}, {"cl", "d"}, {"g", "q"}, {"q", "g"}, {"u", "v"},
-    {"v", "u"}, {"n", "m"}, {"m", "n"}, {"s", "5"}, {"e", "3"}, {"a", "4"}, {"b", "6"}, {"t", "7"},
+    {"v", "u"},  {"n", "m"},  {"m", "n"},  {"s", "5"},  {"e", "3"},  {"a", "4"}, {"b", "6"}, {"t", "7"},
 };
 
 /* Words phishing domains put next to a brand. */
-static const char *const words[] = {"login",  "secure", "account", "support", "portal", "mail",
-                                    "online", "app",    "verify",  "update",  "auth",   "sso",
-                                    "pay",    "help",   "service", "access"};
+static const char *const words[] = {"login",  "secure", "account", "support", "portal", "mail", "online",  "app",
+                                    "verify", "update", "auth",    "sso",     "pay",    "help", "service", "access"};
 
-static const char *const tlds[] = {"com", "net", "org",  "info", "biz", "co",  "io",     "xyz",    "online", "site",
-                                   "shop", "app", "me",  "us",   "cc",  "top", "live",   "br",     "com.br", "net.br"};
+static const char *const tlds[] = {"com",  "net", "org", "info", "biz", "co",  "io",   "xyz", "online", "site",
+                                   "shop", "app", "me",  "us",   "cc",  "top", "live", "br",  "com.br", "net.br"};
 
 static void generate(candidate_set *set, const char *label)
 {

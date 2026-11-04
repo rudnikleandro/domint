@@ -58,13 +58,8 @@ static const provider mail_providers[] = {
 
 /* Matched against the AS name of each address. */
 static const provider proxy_providers[] = {
-    {"CLOUDFLARE", "Cloudflare"},
-    {"AKAMAI", "Akamai"},
-    {"FASTLY", "Fastly"},
-    {"INCAPSULA", "Imperva"},
-    {"SUCURI", "Sucuri"},
-    {"STACKPATH", "StackPath"},
-    {"DDOS-GUARD", "DDoS-Guard"},
+    {"CLOUDFLARE", "Cloudflare"}, {"AKAMAI", "Akamai"},       {"FASTLY", "Fastly"},         {"INCAPSULA", "Imperva"},
+    {"SUCURI", "Sucuri"},         {"STACKPATH", "StackPath"}, {"DDOS-GUARD", "DDoS-Guard"},
 };
 
 /* Matched against the AS name. Addresses in these networks are frequently

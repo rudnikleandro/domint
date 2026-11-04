@@ -200,7 +200,8 @@ const observation *find_observation(const observation_list *observations, const 
 {
     for (size_t i = 0; i < observations->count; i++)
     {
-        if (strcmp(observations->items[i].collector, collector) == 0 && strcmp(observations->items[i].query, query) == 0)
+        if (strcmp(observations->items[i].collector, collector) == 0 &&
+            strcmp(observations->items[i].query, query) == 0)
         {
             return &observations->items[i];
         }

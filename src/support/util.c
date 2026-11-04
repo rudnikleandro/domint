@@ -57,8 +57,7 @@ void sanitize_text(char *text, size_t length, int keep_newlines)
     {
         unsigned char byte = (unsigned char)text[i];
 
-        if (keep_newlines &&
-            (byte == '\n' || byte == '\t' || (byte == '\r' && i + 1 < length && text[i + 1] == '\n')))
+        if (keep_newlines && (byte == '\n' || byte == '\t' || (byte == '\r' && i + 1 < length && text[i + 1] == '\n')))
         {
             continue;
         }

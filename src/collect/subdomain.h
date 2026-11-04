@@ -16,13 +16,12 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
 
 /* Rebuilds `subdomains` from the observations alone: the valid subdomains
  * of `domain`, sorted and deduplicated, with the recorded probe results. */
-void subdomain_interpret(const char *domain, const observation_list *observations,
-                         subdomain_list *subdomains, lookup_status *status);
+void subdomain_interpret(const char *domain, const observation_list *observations, subdomain_list *subdomains,
+                         lookup_status *status);
 
 /* The date (YYYY-MM-DD) of the earliest certificate crt.sh lists for
  * `domain`, or "" when crt.sh did not answer. */
 void subdomain_ct_first_seen(const observation_list *observations, const char *domain, char *out, size_t size);
-
 
 /* Parsing helpers exposed for testing */
 int subdomain_parse_crtsh(const char *json_text, size_t length, const char *target_domain, subdomain_list *subdomains);

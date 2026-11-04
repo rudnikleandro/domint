@@ -66,8 +66,10 @@ static void test_lookalike_generation(void)
  * mail first, the owner's own registrations last. */
 static void test_lookalike_analysis(void)
 {
-    static const unsigned char parking_ns[] = {3, 'n', 's', '1', 8, 'a', 'f', 't', 'e', 'r', 'n', 'i', 'c', 3, 'c', 'o', 'm', 0};
-    static const unsigned char other_ns[] = {3, 'n', 's', '1', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'n', 'e', 't', 0};
+    static const unsigned char parking_ns[] = {3,   'n', 's', '1', 8, 'a', 'f', 't', 'e',
+                                               'r', 'n', 'i', 'c', 3, 'c', 'o', 'm', 0};
+    static const unsigned char other_ns[] = {3,   'n', 's', '1', 7,   'e', 'x', 'a', 'm',
+                                             'p', 'l', 'e', 3,   'n', 'e', 't', 0};
     static const unsigned char own_ns[] = {3, 'n', 's', '1', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0};
     static const unsigned char address[] = {192, 0, 2, 66};
     static const unsigned char mail[] = {0, 10, 2, 'm', 'x', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'n', 'e', 't', 0};
@@ -120,8 +122,9 @@ static void test_lookalike_analysis(void)
     print_report(out, &report, 1, NULL, &options);
     fclose(out);
     CHECK(strstr(text, "Lookalikes    4 registered of 216 variants (1 can receive mail, 1 parked") != NULL);
-    CHECK(strstr(text, "    exaample.com  repetition     -     -                ns1.afternic.com  (parked/for sale)\n") !=
-          NULL);
+    CHECK(
+        strstr(text, "    exaample.com  repetition     -     -                ns1.afternic.com  (parked/for sale)\n") !=
+        NULL);
     CHECK(strstr(text, "    exampel.com   transposition  -     -                (its DNS does not answer)\n") != NULL);
     free(text);
 

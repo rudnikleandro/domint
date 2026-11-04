@@ -141,9 +141,12 @@ static const struct
     char letter;
     const char *name;
     unsigned module;
-} module_flags[] = {{'a', "--addresses", MODULE_ADDRESSES}, {'d', "--dns", MODULE_DNS},
-                    {'w', "--whois", MODULE_WHOIS},         {'t', "--tls", MODULE_TLS},
-                    {'H', "--http", MODULE_HTTP},           {'s', "--subdomains", MODULE_SUBDOMAINS},
+} module_flags[] = {{'a', "--addresses", MODULE_ADDRESSES},
+                    {'d', "--dns", MODULE_DNS},
+                    {'w', "--whois", MODULE_WHOIS},
+                    {'t', "--tls", MODULE_TLS},
+                    {'H', "--http", MODULE_HTTP},
+                    {'s', "--subdomains", MODULE_SUBDOMAINS},
                     {'r', "--reputation", MODULE_REPUTATION},
                     {'l', "--lookalikes", MODULE_LOOKALIKES}};
 

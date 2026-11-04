@@ -112,7 +112,8 @@ https_response https_request(const char *url, size_t max_size, long timeout_seco
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
 
-    struct curl_slist *header_list = curl_slist_append(NULL, "Accept: application/rdap+json, application/json, text/plain, */*");
+    struct curl_slist *header_list =
+        curl_slist_append(NULL, "Accept: application/rdap+json, application/json, text/plain, */*");
 
     for (size_t i = 0; headers != NULL && headers[i] != NULL; i++)
     {
@@ -144,7 +145,8 @@ https_response https_request(const char *url, size_t max_size, long timeout_seco
     {
         free(buffer.data);
         response.status = is_no_response(code) ? OBS_NO_RESPONSE : OBS_ERROR;
-        snprintf(response.error, sizeof(response.error), "%s", error_buffer[0] != '\0' ? error_buffer : curl_easy_strerror(code));
+        snprintf(response.error, sizeof(response.error), "%s",
+                 error_buffer[0] != '\0' ? error_buffer : curl_easy_strerror(code));
         return response;
     }
 

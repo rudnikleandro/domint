@@ -15,7 +15,6 @@
 #define BOOTSTRAP_MAX_SIZE (2 * 1024 * 1024)
 #define RDAP_MAX_SIZE (1024 * 1024)
 
-
 int rdap_find_service(const char *bootstrap, size_t length, const char *tld, char *out, size_t size)
 {
     json_value *document = json_parse(bootstrap, length);
@@ -145,7 +144,8 @@ int rdap_collect(const char *domain, rdap_bootstrap *bootstrap, observation_list
     }
 
     record_observation(observations, RDAP_COLLECTOR, host, domain, response.status,
-                       response.status == OBS_EMPTY ? "the registry has no record of this domain (HTTP 404)" : response.error,
+                       response.status == OBS_EMPTY ? "the registry has no record of this domain (HTTP 404)"
+                                                    : response.error,
                        response.data, response.length);
     free(response.data);
 
@@ -208,7 +208,8 @@ static void read_entities(const json_value *entities, whois_info *info, int dept
         if (has_role(entity, "registrar"))
         {
             const char *name = vcard_property(entity, "fn");
-            copy_once(info->registrar, sizeof(info->registrar), name != NULL ? name : json_get_string(entity, "handle"));
+            copy_once(info->registrar, sizeof(info->registrar),
+                      name != NULL ? name : json_get_string(entity, "handle"));
         }
 
         if (has_role(entity, "abuse"))

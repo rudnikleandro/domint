@@ -108,15 +108,13 @@ static ssize_t fetch_head(const struct addrinfo *address, const char *host, char
 
     char request[512];
 
-    snprintf(
-        request,
-        sizeof(request),
-        "HEAD / HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "User-Agent: " DOMINT_USER_AGENT "\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        host);
+    snprintf(request, sizeof(request),
+             "HEAD / HTTP/1.1\r\n"
+             "Host: %s\r\n"
+             "User-Agent: " DOMINT_USER_AGENT "\r\n"
+             "Connection: close\r\n"
+             "\r\n",
+             host);
 
     ssize_t received = -1;
 

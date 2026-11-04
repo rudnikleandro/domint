@@ -158,8 +158,8 @@ static int format_dnskey(ns_rr rr, char *out, size_t size)
     }
 
     unsigned flags = ns_get16(rdata);
-    snprintf(out, size, "flags %u (%s), algorithm %u", flags, (flags & DNSKEY_FLAG_SEP) != 0 ? "key-signing" : "zone-signing",
-             rdata[3]);
+    snprintf(out, size, "flags %u (%s), algorithm %u", flags,
+             (flags & DNSKEY_FLAG_SEP) != 0 ? "key-signing" : "zone-signing", rdata[3]);
     return 0;
 }
 
@@ -168,7 +168,8 @@ static int read_soa(ns_msg handle, ns_rr rr, dns_info *info)
     const unsigned char *rdata = ns_rr_rdata(rr);
     const unsigned char *rdata_end = rdata + ns_rr_rdlen(rr);
 
-    int consumed = dn_expand(ns_msg_base(handle), ns_msg_end(handle), rdata, info->soa_primary, sizeof(info->soa_primary));
+    int consumed =
+        dn_expand(ns_msg_base(handle), ns_msg_end(handle), rdata, info->soa_primary, sizeof(info->soa_primary));
 
     if (consumed < 0)
     {
@@ -239,8 +240,7 @@ static int dns_exchange_tcp(const struct sockaddr_in *nameserver, const unsigned
 
     if (connect_with_timeout(sockfd, (const struct sockaddr *)nameserver, sizeof(*nameserver)) == 0 &&
         send(sockfd, prefix, sizeof(prefix), 0) == (ssize_t)sizeof(prefix) &&
-        send(sockfd, query, (size_t)query_len, 0) == query_len &&
-        recv_exact(sockfd, prefix, sizeof(prefix)) == 0)
+        send(sockfd, query, (size_t)query_len, 0) == query_len && recv_exact(sockfd, prefix, sizeof(prefix)) == 0)
     {
         int message_len = (prefix[0] << 8) | prefix[1];
 
@@ -266,10 +266,16 @@ int dns_append_edns0(unsigned char *query, int query_len, int capacity)
      * size in the class field, zero extended RCODE/version/flags, no data. */
     const unsigned char opt[EDNS0_OPT_SIZE] = {
         0x00,
-        0x00, 0x29,
-        (unsigned char)(EDNS0_UDP_PAYLOAD >> 8), (unsigned char)(EDNS0_UDP_PAYLOAD & 0xff),
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00,
+        0x00,
+        0x29,
+        (unsigned char)(EDNS0_UDP_PAYLOAD >> 8),
+        (unsigned char)(EDNS0_UDP_PAYLOAD & 0xff),
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
     };
 
     if (query_len < NS_HFIXEDSZ || query_len + EDNS0_OPT_SIZE > capacity)
@@ -384,7 +390,8 @@ int dns_parse_answer(const unsigned char *packet, size_t length, int type, strin
             formatted = expand_name(handle, ns_rr_rdata(rr), value, sizeof(value));
             break;
         case ns_t_a:
-            formatted = ns_rr_rdlen(rr) == 4 && inet_ntop(AF_INET, ns_rr_rdata(rr), value, sizeof(value)) != NULL ? 0 : -1;
+            formatted =
+                ns_rr_rdlen(rr) == 4 && inet_ntop(AF_INET, ns_rr_rdata(rr), value, sizeof(value)) != NULL ? 0 : -1;
             break;
         case ns_t_mx:
             formatted = format_mx(handle, rr, value, sizeof(value));
@@ -600,8 +607,9 @@ void dns_collect(const char *domain, const char *org_domain, const struct in_add
     }
 
     describe_resolvers(&resolver, custom_resolver != NULL, description, sizeof(description));
-    record_observation(observations, DNS_CONFIG_COLLECTOR, custom_resolver != NULL ? "--resolver" : "system configuration",
-                       "nameservers", OBS_OK, NULL, description, strlen(description));
+    record_observation(observations, DNS_CONFIG_COLLECTOR,
+                       custom_resolver != NULL ? "--resolver" : "system configuration", "nameservers", OBS_OK, NULL,
+                       description, strlen(description));
 
     const int types[] = {ns_t_ns, ns_t_mx, ns_t_txt, ns_t_soa, DNS_TYPE_CAA};
 

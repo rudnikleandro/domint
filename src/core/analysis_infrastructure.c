@@ -27,7 +27,8 @@ void analyze_registration(domain_report *report, time_t now)
     {
         if (report->resolve_status == LOOKUP_OK)
         {
-            add_finding(report, SEVERITY_MEDIUM, "The registry has no record of %s, yet the name resolves.", whois->queried);
+            add_finding(report, SEVERITY_MEDIUM, "The registry has no record of %s, yet the name resolves.",
+                        whois->queried);
         }
         else
         {
@@ -47,13 +48,15 @@ void analyze_registration(domain_report *report, time_t now)
 
         if (report->age_days < NEW_DOMAIN_DAYS)
         {
-            add_finding(report, SEVERITY_HIGH,
-                        "Registered %ld days ago (%s). Newly registered domains are a common phishing and malware indicator.",
-                        report->age_days, date);
+            add_finding(
+                report, SEVERITY_HIGH,
+                "Registered %ld days ago (%s). Newly registered domains are a common phishing and malware indicator.",
+                report->age_days, date);
         }
         else if (report->age_days < YOUNG_DOMAIN_DAYS)
         {
-            add_finding(report, SEVERITY_MEDIUM, "Registered %ld days ago (%s): a young domain.", report->age_days, date);
+            add_finding(report, SEVERITY_MEDIUM, "Registered %ld days ago (%s): a young domain.", report->age_days,
+                        date);
         }
     }
 
@@ -70,7 +73,8 @@ void analyze_registration(domain_report *report, time_t now)
         if (expires < now)
         {
             add_finding(report, SEVERITY_MEDIUM,
-                        "The registration expired on %s. Once the registry's grace period ends, the name can be registered by anyone.",
+                        "The registration expired on %s. Once the registry's grace period ends, the name can be "
+                        "registered by anyone.",
                         date);
         }
         else if (days_left <= EXPIRY_IMMINENT_DAYS)
@@ -82,7 +86,8 @@ void analyze_registration(domain_report *report, time_t now)
         else if (days_left <= EXPIRY_WARNING_DAYS)
         {
             add_finding(report, SEVERITY_INFO,
-                        "The registration expires in %ld days (%s). Renewal often happens close to the date; worth checking again later.",
+                        "The registration expires in %ld days (%s). Renewal often happens close to the date; worth "
+                        "checking again later.",
                         days_left, date);
         }
     }
@@ -142,7 +147,8 @@ void analyze_addresses(domain_report *report)
         if (!address->announced)
         {
             add_finding(report, SEVERITY_MEDIUM,
-                        "Resolves to %s, a private or unannounced address: the domain may be sinkholed, parked or exposing an internal host.",
+                        "Resolves to %s, a private or unannounced address: the domain may be sinkholed, parked or "
+                        "exposing an internal host.",
                         address->ip);
             continue;
         }
@@ -159,13 +165,15 @@ void analyze_addresses(domain_report *report)
         {
             proxies_seen[proxy_count] = proxy;
             proxy_count++;
-            add_finding(report, SEVERITY_INFO, "Served through %s, which hides the origin server's real address.", proxy);
+            add_finding(report, SEVERITY_INFO, "Served through %s, which hides the origin server's real address.",
+                        proxy);
         }
     }
 
     if (report->resolve_status == LOOKUP_FAILED && report->whois.status == LOOKUP_OK && report->whois.registered)
     {
-        add_finding(report, SEVERITY_INFO, "No A/AAAA records: nothing is hosted on this name (mail-only, parked or unused).");
+        add_finding(report, SEVERITY_INFO,
+                    "No A/AAAA records: nothing is hosted on this name (mail-only, parked or unused).");
     }
 }
 
@@ -184,7 +192,8 @@ void analyze_dns(domain_report *report)
     if (dns->caa.status == LOOKUP_OK && dns->caa.values.count == 0 && strcmp(report->name, report->org_domain) == 0 &&
         is_registered(report))
     {
-        add_finding(report, SEVERITY_INFO, "No CAA record: any certificate authority may issue certificates for this domain.");
+        add_finding(report, SEVERITY_INFO,
+                    "No CAA record: any certificate authority may issue certificates for this domain.");
     }
 
     char failed[64] = "";
@@ -205,7 +214,8 @@ void analyze_dns(domain_report *report)
 
     if (failed[0] != '\0')
     {
-        add_finding(report, SEVERITY_INFO, "DNS lookups failed for %s; those records are missing from this report.", failed);
+        add_finding(report, SEVERITY_INFO, "DNS lookups failed for %s; those records are missing from this report.",
+                    failed);
     }
 
     /* DNSSEC: DS at the parent with no DNSKEY in the zone breaks resolution
@@ -221,8 +231,9 @@ void analyze_dns(domain_report *report)
         }
         else if (dns->ds.values.count == 0)
         {
-            add_finding(report, SEVERITY_INFO,
-                        "Not signed with DNSSEC: anyone able to tamper with DNS traffic can forge answers for this domain.");
+            add_finding(
+                report, SEVERITY_INFO,
+                "Not signed with DNSSEC: anyone able to tamper with DNS traffic can forge answers for this domain.");
         }
     }
 }

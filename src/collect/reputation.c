@@ -306,6 +306,6 @@ void reputation_interpret(const observation_list *observations, const char *doma
     info->otx_status = interpret_source(observations, OTX_SOURCE, domain, reputation_parse_otx, info, NULL);
     info->urlhaus_status = interpret_source(observations, URLHAUS_SOURCE, domain, reputation_parse_urlhaus, info,
                                             &info->urlhaus_not_queried);
-    info->threatfox_status = interpret_source(observations, THREATFOX_SOURCE, domain, reputation_parse_threatfox,
-                                              info, &info->threatfox_not_queried);
+    info->threatfox_status = interpret_source(observations, THREATFOX_SOURCE, domain, reputation_parse_threatfox, info,
+                                              &info->threatfox_not_queried);
 }

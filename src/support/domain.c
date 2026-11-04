@@ -131,7 +131,8 @@ int normalize_domain(const char *input, char *out, size_t out_size)
  * common category such as co.uk or com.br. */
 void organizational_domain(const char *domain, char *out, size_t out_size)
 {
-    static const char *const second_levels[] = {"ac", "co", "com", "edu", "gob", "gov", "mil", "net", "ne", "nom", "or", "org", "go"};
+    static const char *const second_levels[] = {"ac",  "co", "com", "edu", "gob", "gov", "mil",
+                                                "net", "ne", "nom", "or",  "org", "go"};
 
     const char *last_dot = strrchr(domain, '.');
     const char *second_dot = NULL;

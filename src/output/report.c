@@ -37,7 +37,8 @@ static void describe_signals(const domain_report *report, char *out, size_t size
     {
         if (counts[level] > 0)
         {
-            len += (size_t)snprintf(out + len, size - len, "%s%zu %s", len > 0 ? ", " : "", counts[level], names[level]);
+            len +=
+                (size_t)snprintf(out + len, size - len, "%s%zu %s", len > 0 ? ", " : "", counts[level], names[level]);
         }
     }
 
@@ -87,8 +88,9 @@ static void print_header(FILE *out, size_t count, const report_options *options)
     unsigned modules = options->modules != 0 ? options->modules : MODULE_DEFAULT;
     int contacts = !options->passive && (modules & (MODULE_HTTP | MODULE_TLS | MODULE_SUBDOMAINS)) != 0;
 
-    print_field(out, "Mode", contacts ? "active (the targets were contacted from your IP)"
-                                      : "passive (the targets were not contacted)");
+    print_field(out, "Mode",
+                contacts ? "active (the targets were contacted from your IP)"
+                         : "passive (the targets were not contacted)");
 
     if (modules != MODULE_DEFAULT)
     {
@@ -96,9 +98,14 @@ static void print_header(FILE *out, size_t count, const report_options *options)
         {
             unsigned bit;
             const char *name;
-        } names[] = {{MODULE_ADDRESSES, "addresses"}, {MODULE_DNS, "dns"},   {MODULE_WHOIS, "whois"},
-                     {MODULE_TLS, "tls"},             {MODULE_HTTP, "http"}, {MODULE_SUBDOMAINS, "subdomains"},
-                     {MODULE_REPUTATION, "reputation"}, {MODULE_LOOKALIKES, "lookalikes"}};
+        } names[] = {{MODULE_ADDRESSES, "addresses"},
+                     {MODULE_DNS, "dns"},
+                     {MODULE_WHOIS, "whois"},
+                     {MODULE_TLS, "tls"},
+                     {MODULE_HTTP, "http"},
+                     {MODULE_SUBDOMAINS, "subdomains"},
+                     {MODULE_REPUTATION, "reputation"},
+                     {MODULE_LOOKALIKES, "lookalikes"}};
         char list[128] = "";
 
         for (size_t i = 0; i < ARRAY_COUNT(names); i++)
@@ -139,7 +146,8 @@ static void print_overview(FILE *out, const domain_report *reports, size_t count
     }
 
     print_section(out, "OVERVIEW");
-    fprintf(out, "\n  %-*s%5s%5s%5s  %-*s%s\n", width, "Domain", "High", "Med", "Low", created_width, "Created", "Hosting");
+    fprintf(out, "\n  %-*s%5s%5s%5s  %-*s%s\n", width, "Domain", "High", "Med", "Low", created_width, "Created",
+            "Hosting");
 
     for (size_t i = 0; i < count; i++)
     {
@@ -250,8 +258,8 @@ static void print_registered(FILE *out, const domain_report *report)
             describe_age(report->age_days, age, sizeof(age));
         }
 
-        snprintf(text, sizeof(text), "%s%s%s%s%s", date, age[0] != '\0' ? " (" : "", age,
-                 age[0] != '\0' ? " ago)" : "", whois->registrar[0] != '\0' ? ", " : "");
+        snprintf(text, sizeof(text), "%s%s%s%s%s", date, age[0] != '\0' ? " (" : "", age, age[0] != '\0' ? " ago)" : "",
+                 whois->registrar[0] != '\0' ? ", " : "");
         strncat(text, whois->registrar, sizeof(text) - strlen(text) - 1);
         print_field(out, "Registered", text);
     }
@@ -329,9 +337,10 @@ static void print_summary(FILE *out, const domain_report *report)
 
     if (report_has(report, MODULE_ADDRESSES))
     {
-        print_field(out, "Hosting", report->hosting[0] != '\0' ? report->hosting
-                                    : report->address_count > 0 ? "unknown"
-                                                                : "no addresses");
+        print_field(out, "Hosting",
+                    report->hosting[0] != '\0'  ? report->hosting
+                    : report->address_count > 0 ? "unknown"
+                                                : "no addresses");
     }
 
     if (report_has(report, MODULE_DNS))
@@ -349,7 +358,8 @@ static void print_summary(FILE *out, const domain_report *report)
 
     if (report_has(report, MODULE_DNS) && report->services.count > 0)
     {
-        print_wrapped(out, 2, LABEL_WIDTH, "Services", (const char *const *)report->services.items, report->services.count);
+        print_wrapped(out, 2, LABEL_WIDTH, "Services", (const char *const *)report->services.items,
+                      report->services.count);
     }
 
     if (report_has(report, MODULE_REPUTATION))

@@ -11,8 +11,9 @@
 
 #define RESOLVE_COLLECTOR "resolve"
 #define RESOLVE_SOURCE "system resolver (getaddrinfo)"
-#define RESOLVE_LIMITATION "addresses and PTR names as returned by getaddrinfo/getnameinfo; " \
-                           "the raw DNS answers are not available through this interface"
+#define RESOLVE_LIMITATION                                                                                             \
+    "addresses and PTR names as returned by getaddrinfo/getnameinfo; "                                                 \
+    "the raw DNS answers are not available through this interface"
 
 /* The evidence is one line per address: "<ip>\t<ptr>\n", ptr empty when
  * there is none. */
@@ -92,7 +93,8 @@ void resolve_collect(const char *name, observation_list *observations)
 
     freeaddrinfo(results);
 
-    record_observation(observations, RESOLVE_COLLECTOR, RESOLVE_SOURCE, name, OBS_OK, RESOLVE_LIMITATION, lines, length);
+    record_observation(observations, RESOLVE_COLLECTOR, RESOLVE_SOURCE, name, OBS_OK, RESOLVE_LIMITATION, lines,
+                       length);
     free(lines);
 }
 

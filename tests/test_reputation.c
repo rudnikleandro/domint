@@ -16,9 +16,10 @@ static void test_reputation_parsers(void)
     reputation_info info = {0};
     const char *otx = "{\"pulse_info\":{\"count\":2,\"pulses\":[{\"name\":\"Phishing kit\"},{\"name\":\"C2\"}]},"
                       "\"validation\":[]}";
-    const char *urlhaus = "{\"query_status\":\"ok\",\"url_count\":\"3\",\"blacklists\":{\"spamhaus_dbl\":"
-                          "\"abused_legit_malware\",\"surbl\":\"not listed\"},\"urls\":[{\"url_status\":\"online\","
-                          "\"threat\":\"malware_download\"},{\"url_status\":\"offline\",\"threat\":\"malware_download\"}]}";
+    const char *urlhaus =
+        "{\"query_status\":\"ok\",\"url_count\":\"3\",\"blacklists\":{\"spamhaus_dbl\":"
+        "\"abused_legit_malware\",\"surbl\":\"not listed\"},\"urls\":[{\"url_status\":\"online\","
+        "\"threat\":\"malware_download\"},{\"url_status\":\"offline\",\"threat\":\"malware_download\"}]}";
     const char *threatfox = "{\"query_status\":\"ok\",\"data\":[{\"malware_printable\":\"Cobalt Strike\"}]}";
 
     CHECK_INT(reputation_parse_otx(otx, strlen(otx), &info), 0);
@@ -62,8 +63,9 @@ static void test_reputation_parsers(void)
     report.reputation.threatfox_status = LOOKUP_OK;
     analyze_domain(&report);
 
-    CHECK(has_signal(&report, SEVERITY_HIGH, "ThreatFox lists this domain as an indicator of compromise (1 entry: "
-                                             "Cobalt Strike)"));
+    CHECK(has_signal(&report, SEVERITY_HIGH,
+                     "ThreatFox lists this domain as an indicator of compromise (1 entry: "
+                     "Cobalt Strike)"));
     CHECK(has_signal(&report, SEVERITY_HIGH, "URLhaus has 3 malware URLs on this host, 1 still online"));
     CHECK(has_signal(&report, SEVERITY_HIGH, "Spamhaus DBL"));
     CHECK(has_signal(&report, SEVERITY_LOW, "Referenced in 2 AlienVault OTX pulses"));

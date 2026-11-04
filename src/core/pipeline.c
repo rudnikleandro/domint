@@ -27,8 +27,7 @@ size_t collect_steps(const domain_report *report)
     return (size_t)needs_addresses(report) + (size_t)report_has(report, MODULE_ADDRESSES) +
            (size_t)report_has(report, MODULE_TLS | MODULE_HTTP) + (size_t)report_has(report, MODULE_DNS) +
            (size_t)report_has(report, MODULE_WHOIS) + (size_t)report_has(report, MODULE_REPUTATION) +
-           (size_t)report_has(report, MODULE_LOOKALIKES) +
-           (report_has(report, MODULE_SUBDOMAINS) ? 6 : 0);
+           (size_t)report_has(report, MODULE_LOOKALIKES) + (report_has(report, MODULE_SUBDOMAINS) ? 6 : 0);
 }
 
 void collect_cache_free(collect_cache *cache)

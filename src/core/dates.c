@@ -26,8 +26,7 @@ int parse_whois_date(const char *text, time_t *out)
     }
 
     if (sscanf(text, "%4d-%2d-%2d", &year, &month, &day) == 3 ||
-        sscanf(text, "%4d.%2d.%2d", &year, &month, &day) == 3 ||
-        sscanf(text, "%4d/%2d/%2d", &year, &month, &day) == 3)
+        sscanf(text, "%4d.%2d.%2d", &year, &month, &day) == 3 || sscanf(text, "%4d/%2d/%2d", &year, &month, &day) == 3)
     {
         /* year-month-day */
     }
@@ -41,7 +40,8 @@ int parse_whois_date(const char *text, time_t *out)
             }
         }
     }
-    else if (strlen(text) >= 8 && isdigit((unsigned char)text[7]) && sscanf(text, "%4d%2d%2d", &year, &month, &day) == 3)
+    else if (strlen(text) >= 8 && isdigit((unsigned char)text[7]) &&
+             sscanf(text, "%4d%2d%2d", &year, &month, &day) == 3)
     {
         /* yyyymmdd, as used by registro.br */
     }

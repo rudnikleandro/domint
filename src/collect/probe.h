@@ -9,8 +9,8 @@
  * observation and its result (status code, IP address, Server, Location,
  * title) filled into `subdomains`. Skips probing if passive mode or
  * no_probe is set. */
-void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
-                     observation_list *observations, const char *domain);
+void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe, observation_list *observations,
+                     const char *domain);
 
 /* Fills the probe results of `subdomains` (sorted by name) from the
  * recorded attempts: the first answer wins, HTTPS being recorded before

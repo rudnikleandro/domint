@@ -23,29 +23,52 @@
 #define WHOIS_IANA_COLLECTOR "whois-iana"
 #define WHOIS_CACHED_DETAIL "answer reused from an earlier query in this run"
 
-
 /* Registries format their records differently; these are the field names
  * seen across the common gTLD and ccTLD servers, in order of preference. */
 static const char *const registrar_fields[] = {"Registrar:", "Sponsoring Registrar:", "registrar-name:", NULL};
-static const char *const created_fields[] = {"Creation Date:", "Created On:", "Created:", "Registered on:",
-                                             "Registration Time:", "Registration Date:", "Domain Registration Date:",
-                                             "registered:", NULL};
-static const char *const expires_fields[] = {"Registry Expiry Date:", "Registrar Registration Expiration Date:",
-                                             "Expiry Date:", "Expiration Date:", "Expiration Time:", "Expires On:",
-                                             "Expires:", "paid-till:", NULL};
-static const char *const updated_fields[] = {"Updated Date:", "Last Updated On:", "Last updated:", "Last Modified:",
-                                             "Changed:", "last-update:", NULL};
-static const char *const registrant_fields[] = {"Registrant Organization:", "Registrant Organisation:",
-                                                "Registrant Name:", "Registrant:", "owner:", "org-name:", NULL};
+static const char *const created_fields[] = {"Creation Date:",
+                                             "Created On:",
+                                             "Created:",
+                                             "Registered on:",
+                                             "Registration Time:",
+                                             "Registration Date:",
+                                             "Domain Registration Date:",
+                                             "registered:",
+                                             NULL};
+static const char *const expires_fields[] = {"Registry Expiry Date:",
+                                             "Registrar Registration Expiration Date:",
+                                             "Expiry Date:",
+                                             "Expiration Date:",
+                                             "Expiration Time:",
+                                             "Expires On:",
+                                             "Expires:",
+                                             "paid-till:",
+                                             NULL};
+static const char *const updated_fields[] = {
+    "Updated Date:", "Last Updated On:", "Last updated:", "Last Modified:", "Changed:", "last-update:", NULL};
+static const char *const registrant_fields[] = {"Registrant Organization:",
+                                                "Registrant Organisation:",
+                                                "Registrant Name:",
+                                                "Registrant:",
+                                                "owner:",
+                                                "org-name:",
+                                                NULL};
 static const char *const country_fields[] = {"Registrant Country:", NULL};
 static const char *const abuse_fields[] = {"Registrar Abuse Contact Email:", "abuse-mailbox:", NULL};
 
-static const char *const not_found_markers[] = {"No match for", "NOT FOUND", "No Data Found", "No entries found",
-                                                "Domain not found", "No Object Found", "no matching objects",
-                                                "is available for registration", "Status: free", "Status: AVAILABLE",
+static const char *const not_found_markers[] = {"No match for",
+                                                "NOT FOUND",
+                                                "No Data Found",
+                                                "No entries found",
+                                                "Domain not found",
+                                                "No Object Found",
+                                                "no matching objects",
+                                                "is available for registration",
+                                                "Status: free",
+                                                "Status: AVAILABLE",
                                                 NULL};
-static const char *const privacy_markers[] = {"privacy", "redacted", "withheld", "proxy", "protected",
-                                              "not disclosed", "gdpr", NULL};
+static const char *const privacy_markers[] = {"privacy",   "redacted",      "withheld", "proxy",
+                                              "protected", "not disclosed", "gdpr",     NULL};
 
 static whois_response failure(observation_status status, const char *error)
 {
@@ -362,7 +385,8 @@ void whois_collect(const char *domain, whois_cache *cache, observation_list *obs
     if (found < 0)
     {
         record_observation(observations, WHOIS_COLLECTOR, "", domain, OBS_NOT_QUERIED,
-                           "the registry's server is unknown because " IANA_WHOIS_SERVER " gave no usable answer", NULL, 0);
+                           "the registry's server is unknown because " IANA_WHOIS_SERVER " gave no usable answer", NULL,
+                           0);
         return;
     }
 
@@ -417,7 +441,8 @@ void whois_interpret(const char *domain, const observation_list *observations, w
         if (iana != NULL && listed[0] == '\0')
         {
             snprintf(info->note, sizeof(info->note),
-                     "IANA lists no WHOIS server for .%s, and %s gave no usable answer (%s); the registry may offer RDAP only",
+                     "IANA lists no WHOIS server for .%s, and %s gave no usable answer (%s); the registry may offer "
+                     "RDAP only",
                      tld, info->server, registry->detail);
         }
         else
