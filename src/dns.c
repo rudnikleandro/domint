@@ -2,11 +2,14 @@
 
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <resolv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "model.h"
@@ -379,6 +382,9 @@ int dns_parse_answer(const unsigned char *packet, size_t length, int type, strin
         case ns_t_ns:
         case ns_t_cname:
             formatted = expand_name(handle, ns_rr_rdata(rr), value, sizeof(value));
+            break;
+        case ns_t_a:
+            formatted = ns_rr_rdlen(rr) == 4 && inet_ntop(AF_INET, ns_rr_rdata(rr), value, sizeof(value)) != NULL ? 0 : -1;
             break;
         case ns_t_mx:
             formatted = format_mx(handle, rr, value, sizeof(value));
@@ -824,4 +830,183 @@ void dns_interpret(const char *domain, const char *org_domain, const observation
     string_list_sort(&info->mx.values);
     string_list_sort(&info->txt.values);
     string_list_sort(&info->caa.values);
+}
+
+#define MANY_WINDOW 32
+#define MANY_TIMEOUT_MS 1500
+#define MANY_TRIES 2
+
+static long milliseconds(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec * 1000L + now.tv_nsec / 1000000L;
+}
+
+typedef struct
+{
+    unsigned char query[NS_PACKETSZ];
+    int query_length;
+    int tries;
+    long sent_at;
+    int done;
+} pending_query;
+
+/* Sends query `i` with the DNS id i + 1, so an answer names its query. */
+static void send_query(int sockfd, pending_query *item)
+{
+    if (send(sockfd, item->query, (size_t)item->query_length, 0) == item->query_length)
+    {
+        item->tries++;
+        item->sent_at = milliseconds();
+    }
+    else
+    {
+        item->tries = MANY_TRIES;
+        item->sent_at = 0;
+    }
+}
+
+void dns_query_many(const char *const *names, size_t count, int type, const struct in_addr *custom_resolver,
+                    unsigned char **answers, int *lengths)
+{
+    struct __res_state resolver;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        answers[i] = NULL;
+        lengths[i] = -1;
+    }
+
+    if (count == 0 || count >= 0xffff || open_resolver(&resolver, custom_resolver) != 0)
+    {
+        return;
+    }
+
+    const struct sockaddr_in *nameserver = NULL;
+
+    for (int i = 0; i < resolver.nscount && i < MAXNS && nameserver == NULL; i++)
+    {
+        nameserver = resolver.nsaddr_list[i].sin_family == AF_INET ? &resolver.nsaddr_list[i] : NULL;
+    }
+
+    int sockfd = nameserver != NULL ? socket(AF_INET, SOCK_DGRAM, 0) : -1;
+
+    /* connect() makes the kernel drop datagrams from anyone but the resolver. */
+    if (sockfd < 0 || connect(sockfd, (const struct sockaddr *)nameserver, sizeof(*nameserver)) != 0 ||
+        fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK) != 0)
+    {
+        if (sockfd >= 0)
+        {
+            close(sockfd);
+        }
+
+        close_resolver(&resolver);
+        return;
+    }
+
+    pending_query *items = xcalloc(count, sizeof(*items));
+
+    for (size_t i = 0; i < count; i++)
+    {
+        items[i].query_length = res_nmkquery(&resolver, ns_o_query, names[i], ns_c_in, type, NULL, 0, NULL,
+                                             items[i].query, sizeof(items[i].query));
+
+        if (items[i].query_length < NS_HFIXEDSZ)
+        {
+            items[i].done = 1;
+            continue;
+        }
+
+        items[i].query[0] = (unsigned char)((i + 1) >> 8);
+        items[i].query[1] = (unsigned char)((i + 1) & 0xff);
+    }
+
+    static unsigned char response[NS_MAXMSG];
+    size_t next = 0;
+    size_t finished = 0;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        finished += items[i].done;
+    }
+
+    while (finished < count)
+    {
+        size_t in_flight = 0;
+        long now = milliseconds();
+
+        /* Retry or give up on queries whose answer is late, then keep the
+         * window full with new ones. */
+        for (size_t i = 0; i < next; i++)
+        {
+            pending_query *item = &items[i];
+
+            if (item->done || now - item->sent_at < MANY_TIMEOUT_MS)
+            {
+                in_flight += !item->done;
+                continue;
+            }
+
+            if (item->tries >= MANY_TRIES)
+            {
+                item->done = 1;
+                finished++;
+                continue;
+            }
+
+            send_query(sockfd, item);
+            in_flight++;
+        }
+
+        while (in_flight < MANY_WINDOW && next < count)
+        {
+            if (!items[next].done)
+            {
+                send_query(sockfd, &items[next]);
+                in_flight++;
+            }
+
+            next++;
+        }
+
+        struct pollfd waiting = {sockfd, POLLIN, 0};
+
+        if (poll(&waiting, 1, 100) <= 0)
+        {
+            continue;
+        }
+
+        ssize_t length;
+
+        while ((length = recv(sockfd, response, sizeof(response), 0)) >= NS_HFIXEDSZ)
+        {
+            size_t id = ((size_t)response[0] << 8 | response[1]);
+
+            if (id == 0 || id > count || items[id - 1].done || items[id - 1].tries == 0)
+            {
+                continue;
+            }
+
+            pending_query *item = &items[id - 1];
+            int rcode = response[3] & 0x0f;
+
+            /* SERVFAIL and REFUSED say nothing about the name; let the
+             * retry ask again. */
+            if (rcode != ns_r_noerror && rcode != ns_r_nxdomain && item->tries < MANY_TRIES)
+            {
+                continue;
+            }
+
+            answers[id - 1] = xcalloc((size_t)length, 1);
+            memcpy(answers[id - 1], response, (size_t)length);
+            lengths[id - 1] = (int)length;
+            item->done = 1;
+            finished++;
+        }
+    }
+
+    free(items);
+    close(sockfd);
+    close_resolver(&resolver);
 }

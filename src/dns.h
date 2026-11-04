@@ -14,6 +14,12 @@
 void dns_collect(const char *domain, const char *org_domain, const struct in_addr *custom_resolver,
                  observation_list *observations);
 
+/* Asks `type` for each of `names` through the resolver, many queries at a
+ * time over one socket. answers[i] gets a copy of the raw answer (free it)
+ * and lengths[i] its length, or NULL and -1 when nothing usable came back. */
+void dns_query_many(const char *const *names, size_t count, int type, const struct in_addr *custom_resolver,
+                    unsigned char **answers, int *lengths);
+
 /* Subdomains get a CNAME lookup each, up to this many. */
 #define MAX_CNAME_LOOKUPS 300
 

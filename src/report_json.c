@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "gaps.h"
+#include "json.h"
 #include "model.h"
 #include "tls.h"
 
@@ -23,50 +24,9 @@ static void newline(writer *w)
     fprintf(w->out, "\n%*s", w->depth * 2, "");
 }
 
-/* Bytes that are not valid UTF-8 (a Latin-1 WHOIS answer) are written as
- * the code point of the same value, so the output always parses. */
 static void write_string(writer *w, const char *text)
 {
-    const unsigned char *p = (const unsigned char *)text;
-
-    fputc('"', w->out);
-
-    while (*p != '\0')
-    {
-        size_t length = *p < 0x80 ? 1 : (*p & 0xe0) == 0xc0 ? 2 : (*p & 0xf0) == 0xe0 ? 3 : (*p & 0xf8) == 0xf0 ? 4 : 0;
-        int valid = length > 0;
-
-        for (size_t i = 1; valid && i < length; i++)
-        {
-            valid = (p[i] & 0xc0) == 0x80;
-        }
-
-        if (*p == '"' || *p == '\\')
-        {
-            fprintf(w->out, "\\%c", *p);
-        }
-        else if (*p == '\n')
-        {
-            fputs("\\n", w->out);
-        }
-        else if (*p == '\t')
-        {
-            fputs("\\t", w->out);
-        }
-        else if (*p < 0x20 || *p == 0x7f || !valid)
-        {
-            fprintf(w->out, "\\u%04x", *p);
-            length = 1;
-        }
-        else
-        {
-            fwrite(p, 1, length, w->out);
-        }
-
-        p += length;
-    }
-
-    fputc('"', w->out);
+    json_write_string(w->out, text);
 }
 
 /* Starts the next member or element: the comma, the line, and the key. */
@@ -398,6 +358,36 @@ static void write_subdomains(writer *w, const domain_report *report)
     close_value(w, '}');
 }
 
+static void write_lookalikes(writer *w, const domain_report *report)
+{
+    const lookalike_list *list = &report->lookalikes;
+
+    open_value(w, "lookalikes", '{');
+    put_string(w, "status", status_name(list->status));
+    put_long(w, "checked", (long)list->checked);
+    put_long(w, "unanswered", (long)list->unanswered);
+    open_value(w, "registered", '[');
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        const lookalike_info *item = &list->items[i];
+
+        open_value(w, NULL, '{');
+        put_string(w, "name", item->name);
+        put_string(w, "technique", item->technique);
+        put_bool(w, "receives_mail", item->has_mail);
+        put_bool(w, "likely_owner", item->likely_defensive);
+        put_bool(w, "parked", item->parked);
+        put_bool(w, "dns_fails", item->dns_fails);
+        put_list(w, "addresses", &item->addresses);
+        put_list(w, "nameservers", &item->nameservers);
+        close_value(w, '}');
+    }
+
+    close_value(w, ']');
+    close_value(w, '}');
+}
+
 /* The values worth feeding to a blocklist or a threat-intelligence
  * platform: the domain, the subdomains that serve something, and the
  * addresses behind them. */
@@ -428,10 +418,23 @@ static void write_indicators(writer *w, const domain_report *report)
         }
     }
 
+    string_list lookalikes = {0};
+
+    for (size_t i = 0; i < report->lookalikes.count; i++)
+    {
+        if (!report->lookalikes.items[i].likely_defensive)
+        {
+            string_list_add(&lookalikes, report->lookalikes.items[i].name);
+        }
+    }
+
     open_value(w, "indicators", '{');
     put_list(w, "domains", &domains);
     put_list(w, "ips", &ips);
+    put_list(w, "lookalike_domains", &lookalikes);
     close_value(w, '}');
+
+    string_list_free(&lookalikes);
 
     string_list_free(&domains);
     string_list_free(&ips);
@@ -518,6 +521,11 @@ static void write_domain(writer *w, const domain_report *report)
         write_subdomains(w, report);
     }
 
+    if (report_has(report, MODULE_LOOKALIKES))
+    {
+        write_lookalikes(w, report);
+    }
+
     write_indicators(w, report);
     close_value(w, '}');
 }
@@ -531,10 +539,10 @@ void print_report_json(FILE *out, const domain_report *reports, size_t count, co
         const char *name;
     } module_names[] = {{MODULE_ADDRESSES, "addresses"}, {MODULE_DNS, "dns"},       {MODULE_WHOIS, "whois"},
                         {MODULE_TLS, "tls"},             {MODULE_HTTP, "http"},     {MODULE_SUBDOMAINS, "subdomains"},
-                        {MODULE_REPUTATION, "reputation"}};
+                        {MODULE_REPUTATION, "reputation"}, {MODULE_LOOKALIKES, "lookalikes"}};
     static const char *const strengths[] = {"weak", "medium", "strong"};
     writer w = {out, 0, {1}};
-    unsigned modules = options->modules != 0 ? options->modules : MODULE_ALL;
+    unsigned modules = options->modules != 0 ? options->modules : MODULE_DEFAULT;
     char generated[32];
     time_t now = time(NULL);
     struct tm parts;

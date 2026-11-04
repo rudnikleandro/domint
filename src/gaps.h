@@ -17,6 +17,7 @@ typedef enum
     GAP_REPUTATION,
     GAP_SUBDOMAINS,
     GAP_ALIASES,
+    GAP_LOOKALIKES,
     GAP_COUNT
 } gap_area;
 

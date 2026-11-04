@@ -5,11 +5,13 @@
 #include "analysis.h"
 #include "dns.h"
 #include "json.h"
+#include "lookalike.h"
 #include "model.h"
 #include "reputation.h"
 #include "report.h"
 #include "subdomain.h"
 #include "test.h"
+#include "domain.h"
 #include "util.h"
 
 static void add_live(domain_report *report, const char *name, long code, const char *ip, const char *asn,
@@ -647,6 +649,209 @@ static void test_terminal_escapes(void)
     string_list_free(&info.otx_pulse_names);
 }
 
+/* A DNS answer for `name` with one record of `type` holding `rdata`. */
+static size_t build_answer(unsigned char *out, const char *name, int type, int rcode, const unsigned char *rdata,
+                           size_t rdata_length)
+{
+    size_t n = 0;
+    const unsigned char header[] = {0x00, 0x01, 0x81, (unsigned char)(0x80 | rcode), 0x00, 0x01, 0x00,
+                                    rdata_length > 0 ? 0x01 : 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    memcpy(out, header, sizeof(header));
+    n = sizeof(header);
+
+    for (const char *label = name; *label != '\0';)
+    {
+        size_t length = strcspn(label, ".");
+        out[n++] = (unsigned char)length;
+        memcpy(out + n, label, length);
+        n += length;
+        label += length + (label[length] == '.');
+    }
+
+    out[n++] = 0;
+    out[n++] = 0;
+    out[n++] = (unsigned char)type;
+    out[n++] = 0;
+    out[n++] = 1;
+
+    if (rdata_length > 0)
+    {
+        const unsigned char answer[] = {0xc0, 0x0c, 0x00, (unsigned char)type, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c,
+                                        0x00, (unsigned char)rdata_length};
+        memcpy(out + n, answer, sizeof(answer));
+        n += sizeof(answer);
+        memcpy(out + n, rdata, rdata_length);
+        n += rdata_length;
+    }
+
+    return n;
+}
+
+static void record_lookalike(observation_list *obs, const char *type_name, const char *name, int type, int rcode,
+                             const unsigned char *rdata, size_t rdata_length)
+{
+    unsigned char packet[512];
+    char query[DOMAIN_SIZE + 8];
+    size_t length = build_answer(packet, name, type, rcode, rdata, rdata_length);
+
+    snprintf(query, sizeof(query), "%s %s", type_name, name);
+    record_observation(obs, LOOKALIKE_COLLECTOR, "configured resolver", query, OBS_OK, NULL, packet, length);
+}
+
+/* Variants of a name: the usual typo and phishing patterns, never the
+ * name itself, always valid host names. */
+static void test_lookalike_generation(void)
+{
+    lookalike_candidate *items = calloc(MAX_LOOKALIKES, sizeof(*items));
+    size_t count = lookalike_generate("www.example.com", items, MAX_LOOKALIKES);
+    const char *expected[][2] = {{"exmple.com", "omission"},       {"exaample.com", "repetition"},
+                                 {"exmaple.com", "transposition"}, {"examp1e.com", "homoglyph"},
+                                 {"exampel.com", "transposition"}, {"example-login.com", "phishing-word"},
+                                 {"example.net", "tld-swap"},      {"exampie.com", "homoglyph"}};
+
+    CHECK(count > 150);
+
+    for (size_t e = 0; e < sizeof(expected) / sizeof(expected[0]); e++)
+    {
+        int found = 0;
+
+        for (size_t i = 0; i < count; i++)
+        {
+            found |= strcmp(items[i].name, expected[e][0]) == 0 && strcmp(items[i].technique, expected[e][1]) == 0;
+        }
+
+        CHECK(found);
+    }
+
+    int bad = 0;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        char normalized[DOMAIN_SIZE];
+        bad |= strcmp(items[i].name, "example.com") == 0;
+        bad |= normalize_domain(items[i].name, normalized, sizeof(normalized)) != 0;
+    }
+
+    CHECK(!bad);
+
+    /* A second-level suffix stays whole: example.com.br -> exemple.com.br. */
+    count = lookalike_generate("example.com.br", items, MAX_LOOKALIKES);
+    int kept = 0;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        kept |= strcmp(items[i].name, "exemple.com.br") == 0;
+    }
+
+    CHECK(kept);
+    CHECK_INT(lookalike_generate("localhost", items, MAX_LOOKALIKES), 0);
+    free(items);
+}
+
+/* Registered variants are read back from the answers and sorted by risk:
+ * mail first, the owner's own registrations last. */
+static void test_lookalike_analysis(void)
+{
+    static const unsigned char parking_ns[] = {3, 'n', 's', '1', 8, 'a', 'f', 't', 'e', 'r', 'n', 'i', 'c', 3, 'c', 'o', 'm', 0};
+    static const unsigned char other_ns[] = {3, 'n', 's', '1', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'n', 'e', 't', 0};
+    static const unsigned char own_ns[] = {3, 'n', 's', '1', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0};
+    static const unsigned char address[] = {192, 0, 2, 66};
+    static const unsigned char mail[] = {0, 10, 2, 'm', 'x', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'n', 'e', 't', 0};
+    domain_report report = {0};
+
+    snprintf(report.name, sizeof(report.name), "example.com");
+    snprintf(report.org_domain, sizeof(report.org_domain), "example.com");
+    report.modules = MODULE_LOOKALIKES | MODULE_DNS;
+    report.dns.ns.status = LOOKUP_OK;
+    string_list_add(&report.dns.ns.values, "ns1.example.com");
+
+    observation_list *obs = &report.observations;
+    record_lookalike(obs, "NS", "exmple.com", 2, 0, other_ns, sizeof(other_ns));
+    record_lookalike(obs, "A", "exmple.com", 1, 0, address, sizeof(address));
+    record_lookalike(obs, "MX", "exmple.com", 15, 0, mail, sizeof(mail));
+    record_lookalike(obs, "NS", "exaample.com", 2, 0, parking_ns, sizeof(parking_ns));
+    record_lookalike(obs, "NS", "example.net", 2, 0, own_ns, sizeof(own_ns));
+    record_lookalike(obs, "NS", "exampel.com", 2, 2, NULL, 0);
+    record_observation(obs, LOOKALIKE_COLLECTOR, "configured resolver", "example.com", OBS_OK,
+                       "216 variants checked: 4 registered, 3 unanswered", NULL, 0);
+
+    lookalike_interpret("example.com", obs, &report.lookalikes);
+    CHECK_INT(report.lookalikes.status, LOOKUP_OK);
+    CHECK_INT(report.lookalikes.checked, 216);
+    CHECK_INT(report.lookalikes.count, 4);
+
+    analyze_domain(&report);
+
+    const lookalike_list *list = &report.lookalikes;
+    CHECK_STR(list->items[0].name, "exmple.com");
+    CHECK_INT(list->items[0].has_mail, 1);
+    CHECK_STR(list->items[0].addresses.items[0], "192.0.2.66");
+    CHECK_STR(list->items[1].name, "exampel.com");
+    CHECK_INT(list->items[1].dns_fails, 1);
+    CHECK_STR(list->items[2].name, "exaample.com");
+    CHECK_INT(list->items[2].parked, 1);
+    CHECK_STR(list->items[3].name, "example.net");
+    CHECK_INT(list->items[3].likely_defensive, 1);
+
+    CHECK(has_signal(&report, SEVERITY_MEDIUM, "1 lookalike domain can receive mail (MX)"));
+    CHECK(find_signal(&report, "exmple.com (omission)") != NULL);
+    CHECK(has_signal(&report, SEVERITY_INFO, "1 lookalike domain is parked or for sale"));
+    CHECK(has_signal(&report, SEVERITY_INFO, "1 lookalike domain shares the same nameservers"));
+
+    char *text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&text, &length);
+    report_options options = {.full = 1};
+
+    print_report(out, &report, 1, NULL, &options);
+    fclose(out);
+    CHECK(strstr(text, "Lookalikes    4 registered of 216 variants (1 can receive mail, 1 parked") != NULL);
+    CHECK(strstr(text, "    exaample.com  repetition     -     -                ns1.afternic.com  (parked/for sale)\n") !=
+          NULL);
+    CHECK(strstr(text, "    exampel.com   transposition  -     -                (its DNS does not answer)\n") != NULL);
+    free(text);
+
+    domain_report_free(&report);
+}
+
+/* STIX ids of observables come from their value, as the specification
+ * says, so imports merge; this one is what the OASIS stix2 library gives. */
+static void test_stix_output(void)
+{
+    domain_report report = {0};
+    snprintf(report.name, sizeof(report.name), "example.com");
+    report.modules = MODULE_LOOKALIKES;
+    report.lookalikes.status = LOOKUP_OK;
+    report.lookalikes.count = 1;
+    report.lookalikes.items = calloc(1, sizeof(*report.lookalikes.items));
+    snprintf(report.lookalikes.items[0].name, DOMAIN_SIZE, "exmple.com");
+    report.lookalikes.items[0].technique = "omission";
+    report.lookalikes.items[0].has_mail = 1;
+    analyze_domain(&report);
+
+    char *text = NULL;
+    size_t length = 0;
+    FILE *out = open_memstream(&text, &length);
+    report_options options = {0};
+
+    print_report_stix(out, &report, 1, &options);
+    fclose(out);
+
+    json_value *doc = json_parse(text, length);
+    CHECK(doc != NULL);
+    CHECK_STR(json_get_string(doc, "type"), "bundle");
+    CHECK(strstr(text, "\"domain-name--bedb4899-d24b-5401-bc86-8f6b4cc18ec7\"") != NULL);
+    CHECK(strstr(text, "\"pattern\": \"[domain-name:value = 'exmple.com']\"") != NULL);
+    CHECK(strstr(text, "\"indicator_types\": [\"anomalous-activity\"]") != NULL);
+    CHECK(strstr(text, "\"type\": \"note\"") != NULL);
+    CHECK(strstr(text, "\"type\": \"report\"") != NULL);
+
+    json_free(doc);
+    free(text);
+    domain_report_free(&report);
+}
+
 void test_subdomains(void)
 {
     subdomain_list list = {0};
@@ -854,4 +1059,7 @@ void test_subdomains(void)
     test_reputation_parsers();
     test_json_output();
     test_terminal_escapes();
+    test_lookalike_generation();
+    test_lookalike_analysis();
+    test_stix_output();
 }

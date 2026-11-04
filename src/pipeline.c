@@ -6,6 +6,7 @@
 #include "domain.h"
 #include "model.h"
 #include "http.h"
+#include "lookalike.h"
 #include "progress.h"
 #include "rdap.h"
 #include "reputation.h"
@@ -25,6 +26,7 @@ size_t collect_steps(const domain_report *report)
     return (size_t)needs_addresses(report) + (size_t)report_has(report, MODULE_ADDRESSES) +
            (size_t)report_has(report, MODULE_TLS | MODULE_HTTP) + (size_t)report_has(report, MODULE_DNS) +
            (size_t)report_has(report, MODULE_WHOIS) + (size_t)report_has(report, MODULE_REPUTATION) +
+           (size_t)report_has(report, MODULE_LOOKALIKES) +
            (report_has(report, MODULE_SUBDOMAINS) ? 6 : 0);
 }
 
@@ -110,6 +112,12 @@ void collect_domain(domain_report *report, const collect_options *options)
         reputation_collect(report->name, observations);
     }
 
+    if (report_has(report, MODULE_LOOKALIKES))
+    {
+        progress_step("lookalike domains");
+        lookalike_collect(report->name, options->resolver, observations);
+    }
+
     if (report_has(report, MODULE_SUBDOMAINS))
     {
         /* A working list for the probes and ASN lookups; the report's own
@@ -154,6 +162,7 @@ void interpret_domain(domain_report *report)
     asn_interpret_subdomains(observations, &report->subdomains);
     subdomain_ct_first_seen(observations, report->name, report->ct_first_seen, sizeof(report->ct_first_seen));
     reputation_interpret(observations, report->name, &report->reputation);
+    lookalike_interpret(report->name, observations, &report->lookalikes);
 
     analyze_domain(report);
 }

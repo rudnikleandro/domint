@@ -22,6 +22,7 @@
 #include "domain.h"
 #include "http.h"
 #include "json.h"
+#include "lookalike.h"
 #include "model.h"
 #include "rdap.h"
 #include "report.h"
@@ -348,6 +349,9 @@ static void fuzz_domain(void)
 
     normalize_domain(text, out, sizeof(out));
     organizational_domain(text, out, sizeof(out));
+
+    static lookalike_candidate variants[MAX_LOOKALIKES];
+    lookalike_generate(text, variants, MAX_LOOKALIKES);
     free(text);
 }
 
@@ -365,6 +369,7 @@ static void render(const domain_report *report, size_t count)
     print_report(sink, report, count, NULL, &text);
     print_report(sink, report, count, NULL, &concise);
     print_report_json(sink, report, count, NULL, &text);
+    print_report_stix(sink, report, count, &text);
 }
 
 /* Hostile answers recorded as observations, run through the whole
@@ -393,6 +398,14 @@ static void fuzz_pipeline(void)
                        input_length);
     record_observation(obs, "rdap", "rdap.example", "example.com", OBS_OK, NULL, input, input_length);
     record_observation(obs, "reputation", "otx.alienvault.com", "example.com", OBS_OK, NULL, input, input_length);
+    record_observation(obs, LOOKALIKE_COLLECTOR, "configured resolver", "NS exmple.com", OBS_OK, NULL, input,
+                       input_length);
+    record_observation(obs, LOOKALIKE_COLLECTOR, "configured resolver", "A exmple.com", OBS_OK, NULL, input,
+                       input_length);
+    record_observation(obs, LOOKALIKE_COLLECTOR, "configured resolver", "MX exmple.com", OBS_OK, NULL, input,
+                       input_length);
+    record_observation(obs, LOOKALIKE_COLLECTOR, "configured resolver", "example.com", OBS_OK,
+                       "216 variants checked: 1 registered, 0 unanswered", NULL, 0);
 
     subdomain_interpret("example.com", obs, &report.subdomains, &status);
     report.subdomain_status = status;
@@ -402,6 +415,7 @@ static void fuzz_pipeline(void)
     tls_interpret(obs, &report.tls);
     rdap_interpret("example.com", obs, &report.whois);
     reputation_interpret(obs, "example.com", &report.reputation);
+    lookalike_interpret("example.com", obs, &report.lookalikes);
     analyze_domain(&report);
     render(&report, 1);
     domain_report_free(&report);
@@ -430,8 +444,10 @@ static void fuzz_report_fields(void)
         offset = input_length > 0 ? (offset + n_) % input_length : 0;                            \
     } while (0)
 
-        snprintf(report->name, sizeof(report->name), r == 0 ? "example.com" : "example.org");
-        snprintf(report->org_domain, sizeof(report->org_domain), "%s", report->name);
+        const char *name = r == 0 ? "example.com" : "example.org";
+
+        snprintf(report->name, sizeof(report->name), "%s", name);
+        snprintf(report->org_domain, sizeof(report->org_domain), "%s", name);
         report->whois.status = LOOKUP_OK;
         report->whois.registered = 1;
         TAKE(report->whois.registrar);

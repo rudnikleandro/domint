@@ -5,7 +5,7 @@
 
 #include "model.h"
 
-#define HTTP_USER_AGENT "domint/0.3"
+#define HTTP_USER_AGENT "domint/" DOMINT_VERSION
 #define HTTP_COLLECTOR "http"
 
 /* Sends one HEAD request to the first address that answers on port 80,

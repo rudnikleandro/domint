@@ -30,4 +30,8 @@ void print_report(FILE *out, const domain_report *reports, size_t count, const c
 void print_report_json(FILE *out, const domain_report *reports, size_t count, const correlation *links,
                        const report_options *options);
 
+/* The report as a STIX 2.1 bundle, to import into OpenCTI, MISP or any
+ * threat-intelligence platform. */
+void print_report_stix(FILE *out, const domain_report *reports, size_t count, const report_options *options);
+
 #endif

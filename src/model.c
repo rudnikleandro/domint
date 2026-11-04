@@ -241,4 +241,12 @@ void domain_report_free(domain_report *report)
     string_list_free(&report->reputation.threatfox_malware);
     string_list_free(&report->services);
     subdomain_list_free(&report->subdomains);
+
+    for (size_t i = 0; i < report->lookalikes.count; i++)
+    {
+        string_list_free(&report->lookalikes.items[i].nameservers);
+        string_list_free(&report->lookalikes.items[i].addresses);
+    }
+
+    free(report->lookalikes.items);
 }

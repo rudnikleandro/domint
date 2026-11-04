@@ -22,6 +22,7 @@ typedef struct
     int full;
     int raw;
     int json;
+    int stix;
     int no_subdomains;
     int no_probe;
     unsigned modules; /* MODULE_* picked with -a, -d, -w, -t, -H, -s; 0: all */
@@ -35,7 +36,7 @@ static void print_usage(FILE *out, const char *program)
     fprintf(out, "Usage: %s [options] <domain> [domain ...]\n", program);
     fprintf(out, "       %s [options] -f <file>\n", program);
     fprintf(out, "\n");
-    fprintf(out, "Modules (default: all of them; pick one or more, e.g. -wd):\n");
+    fprintf(out, "Modules (default: all but -l; pick one or more, e.g. -wd):\n");
     fprintf(out, "  -a, --addresses        Addresses, reverse DNS and network (ASN)\n");
     fprintf(out, "  -d, --dns              DNS records: NS, MX, SPF, DMARC, CAA, DNSSEC, SOA, TXT\n");
     fprintf(out, "  -w, --whois            Registration data (RDAP, falling back to WHOIS)\n");
@@ -45,12 +46,15 @@ static void print_usage(FILE *out, const char *program)
     fprintf(out, "                         with --active, which of them answer over HTTP/HTTPS\n");
     fprintf(out, "  -r, --reputation       Threat intel: AlienVault OTX, plus abuse.ch URLhaus\n");
     fprintf(out, "                         and ThreatFox when ABUSECH_AUTH_KEY holds a key\n");
+    fprintf(out, "  -l, --lookalikes       Typosquatting: which of ~1000 variants of the name are\n");
+    fprintf(out, "                         registered, and which can receive mail\n");
     fprintf(out, "Picked modules show their full sections.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
     fprintf(out, "  -f, --file <path>      Read domains from a file, one per line (# comments)\n");
     fprintf(out, "  -o, --output <path>    Write the report to a file instead of the terminal\n");
-    fprintf(out, "  -j, --json             Write the report as JSON (for MISP, OpenCTI, a SIEM...)\n");
+    fprintf(out, "  -j, --json             Write the report as JSON (for scripts and SIEMs)\n");
+    fprintf(out, "      --stix             Write a STIX 2.1 bundle (for OpenCTI, MISP and other TIPs)\n");
     fprintf(out, "      --full             Show every section with the collected data\n");
     fprintf(out, "      --raw              Also list every query made (SOURCES) and append the raw\n");
     fprintf(out, "                         WHOIS and HTTP responses\n");
@@ -63,6 +67,7 @@ static void print_usage(FILE *out, const char *program)
     fprintf(out, "      --no-probe         Skip HTTP/HTTPS liveness probing of subdomains\n");
     fprintf(out, "      --resolver <ipv4>  Send the DNS record queries to this resolver; it will\n");
     fprintf(out, "                         see which domains you investigate\n");
+    fprintf(out, "  -V, --version          Show the version\n");
     fprintf(out, "  -h, --help             Show this help\n");
     fprintf(out, "\n");
     fprintf(out, "Domains can be given as URLs or defanged (hxxps://example[.]com/path).\n");
@@ -138,7 +143,8 @@ static const struct
 } module_flags[] = {{'a', "--addresses", MODULE_ADDRESSES}, {'d', "--dns", MODULE_DNS},
                     {'w', "--whois", MODULE_WHOIS},         {'t', "--tls", MODULE_TLS},
                     {'H', "--http", MODULE_HTTP},           {'s', "--subdomains", MODULE_SUBDOMAINS},
-                    {'r', "--reputation", MODULE_REPUTATION}};
+                    {'r', "--reputation", MODULE_REPUTATION},
+                    {'l', "--lookalikes", MODULE_LOOKALIKES}};
 
 static unsigned module_of_letter(char letter)
 {
@@ -200,6 +206,12 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         {
             opts->modules |= modules;
         }
+        else if (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0)
+        {
+            printf("domint %s\n", DOMINT_VERSION);
+            *done = 1;
+            return 0;
+        }
         else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
         {
             print_usage(stdout, argv[0]);
@@ -234,6 +246,10 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         {
             opts->json = 1;
         }
+        else if (strcmp(arg, "--stix") == 0)
+        {
+            opts->stix = 1;
+        }
         else if (strcmp(arg, "--resolver") == 0 && has_value)
         {
             opts->resolver = argv[++i];
@@ -256,6 +272,12 @@ static int parse_arguments(int argc, char *argv[], options *opts, string_list *d
         {
             add_domain(domains, arg);
         }
+    }
+
+    if (opts->json && opts->stix)
+    {
+        fprintf(stderr, "--json and --stix cannot be used together.\n");
+        return 1;
     }
 
     if (opts->active && opts->passive)
@@ -342,7 +364,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    unsigned modules = opts.modules != 0 ? opts.modules : MODULE_ALL;
+    unsigned modules = opts.modules != 0 ? opts.modules : MODULE_DEFAULT;
 
     if (opts.no_subdomains)
     {
@@ -388,6 +410,10 @@ int main(int argc, char *argv[])
     if (opts.json)
     {
         print_report_json(out, reports, domains.count, &links, &report_opts);
+    }
+    else if (opts.stix)
+    {
+        print_report_stix(out, reports, domains.count, &report_opts);
     }
     else
     {

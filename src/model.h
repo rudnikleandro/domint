@@ -9,7 +9,7 @@
 #define MAX_ADDRESSES 32
 #define MAX_FINDINGS 32
 
-#define DOMINT_VERSION "0.3.0"
+#define DOMINT_VERSION "1.0.0"
 
 /* Zero is SKIPPED, so a zero-initialized report means "nothing ran yet". */
 typedef enum
@@ -149,6 +149,29 @@ typedef struct
     string_list names; /* subject alternative names (DNS entries) */
 } tls_info;
 
+/* A registered domain that imitates the investigated one. */
+typedef struct
+{
+    char name[DOMAIN_SIZE];
+    const char *technique;  /* how it was made: "homoglyph", "tld-swap"... */
+    int dns_fails;          /* registered, but its nameservers do not answer */
+    string_list nameservers;
+    string_list addresses;
+    int has_mail;           /* it has MX records: it can receive mail */
+    int likely_defensive;   /* same nameservers or addresses as the domain */
+    int parked;             /* served by a parking or domain-sale service */
+} lookalike_info;
+
+typedef struct
+{
+    lookup_status status;
+    size_t checked;
+    size_t unanswered;
+    size_t count;
+    size_t capacity;
+    lookalike_info *items;
+} lookalike_list;
+
 /* What threat-intelligence sources know about the domain. */
 typedef struct
 {
@@ -225,7 +248,11 @@ typedef struct
 #define MODULE_HTTP 0x10u
 #define MODULE_SUBDOMAINS 0x20u
 #define MODULE_REPUTATION 0x40u
-#define MODULE_ALL 0x7fu
+#define MODULE_LOOKALIKES 0x80u
+#define MODULE_ALL 0xffu
+/* Without module flags: everything but the lookalikes, which take a
+ * thousand DNS queries per domain and are asked for with -l. */
+#define MODULE_DEFAULT (MODULE_ALL & ~MODULE_LOOKALIKES)
 
 typedef struct
 {
@@ -245,6 +272,7 @@ typedef struct
     dns_info dns;
     whois_info whois;
     reputation_info reputation;
+    lookalike_list lookalikes;
 
     /* Every query made for this domain, in order, with its raw answer. */
     observation_list observations;

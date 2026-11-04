@@ -238,7 +238,10 @@ static int compare_indicators(const void *a, const void *b)
  * spans two or more domains becomes a shared indicator. */
 static void build_indicators(pivot_list *pivots, correlation *out)
 {
-    qsort(pivots->items, pivots->count, sizeof(*pivots->items), compare_pivots);
+    if (pivots->count > 1)
+    {
+        qsort(pivots->items, pivots->count, sizeof(*pivots->items), compare_pivots);
+    }
 
     size_t start = 0;
 

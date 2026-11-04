@@ -2,6 +2,7 @@
 #define DOMINT_JSON_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 /* A small JSON reader for untrusted input (RDAP answers): it parses at most
  * `length` bytes, rejects anything that is not strict JSON, caps nesting
@@ -46,5 +47,10 @@ const char *json_get_string(const json_value *object, const char *key);
 const json_value *json_at(const json_value *array, size_t index);
 const char *json_string(const json_value *value);
 size_t json_count(const json_value *array);
+
+/* Writes `text` as a JSON string, quotes included. Bytes that are not valid
+ * UTF-8 are written as the code point of the same value, so the output
+ * always parses. */
+void json_write_string(FILE *out, const char *text);
 
 #endif

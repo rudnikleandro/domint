@@ -1,5 +1,6 @@
 #include "json.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -565,4 +566,50 @@ const char *json_string(const json_value *value)
 size_t json_count(const json_value *array)
 {
     return array != NULL && array->type == JSON_ARRAY ? array->count : 0;
+}
+
+/* Bytes that are not valid UTF-8 (a Latin-1 WHOIS answer) are written as
+ * the code point of the same value, so the output always parses. */
+void json_write_string(FILE *out, const char *text)
+{
+    const unsigned char *p = (const unsigned char *)text;
+
+    fputc('"', out);
+
+    while (*p != '\0')
+    {
+        size_t length = *p < 0x80 ? 1 : (*p & 0xe0) == 0xc0 ? 2 : (*p & 0xf0) == 0xe0 ? 3 : (*p & 0xf8) == 0xf0 ? 4 : 0;
+        int valid = length > 0;
+
+        for (size_t i = 1; valid && i < length; i++)
+        {
+            valid = (p[i] & 0xc0) == 0x80;
+        }
+
+        if (*p == '"' || *p == '\\')
+        {
+            fprintf(out, "\\%c", *p);
+        }
+        else if (*p == '\n')
+        {
+            fputs("\\n", out);
+        }
+        else if (*p == '\t')
+        {
+            fputs("\\t", out);
+        }
+        else if (*p < 0x20 || *p == 0x7f || !valid)
+        {
+            fprintf(out, "\\u%04x", *p);
+            length = 1;
+        }
+        else
+        {
+            fwrite(p, 1, length, out);
+        }
+
+        p += length;
+    }
+
+    fputc('"', out);
 }

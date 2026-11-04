@@ -5,19 +5,21 @@
 
 #include "asn.h"
 #include "dns.h"
+#include "lookalike.h"
 #include "model.h"
 #include "reputation.h"
 #include "subdomain.h"
 
 static const char *const labels[GAP_COUNT] = {"addresses",  "network (ASN)", "DNS",            "registration",
-                                              "reputation", "subdomains",    "aliases (CNAME)"};
+                                              "reputation", "subdomains",    "aliases (CNAME)", "lookalikes"};
 static const char *const impacts[GAP_COUNT] = {NULL,
                                                "hosting unknown",
                                                "those records are missing",
                                                NULL,
                                                "a listing may be missed",
                                                "the list may be incomplete",
-                                               "takeover checks are incomplete"};
+                                               "takeover checks are incomplete",
+                                               "some variants went unchecked"};
 
 const char *gap_label(gap_area area)
 {
@@ -89,6 +91,12 @@ int gap_area_of(const domain_report *report, const observation *item)
         return GAP_SUBDOMAINS;
     }
 
+    /* Only the summary: one unanswered variant among a thousand is noise. */
+    if (strcmp(item->collector, LOOKALIKE_COLLECTOR) == 0 && strchr(item->query, ' ') == NULL)
+    {
+        return GAP_LOOKALIKES;
+    }
+
     return -1;
 }
 
@@ -107,6 +115,11 @@ void gap_describe(const observation *item, gap_area area, char *what, size_t wha
     else if (area == GAP_ADDRESSES)
     {
         asked = "system resolver";
+    }
+
+    if (area == GAP_LOOKALIKES)
+    {
+        asked = item->detail;
     }
 
     snprintf(what, what_size, "%s", asked);

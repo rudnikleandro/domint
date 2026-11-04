@@ -338,7 +338,7 @@ void subdomain_collect(const char *domain, observation_list *observations, subdo
     }
     else if (crtsh.status == OBS_LIMITED && crtsh.http_code != 429)
     {
-        snprintf(detail, sizeof(detail), "%s; no Certificate Transparency names were collected", crtsh.error);
+        snprintf(detail, sizeof(detail), "%.180s; no Certificate Transparency names were collected", crtsh.error);
     }
     else
     {
@@ -916,7 +916,7 @@ static void probe_parse(const char *text, subdomain_info *sub)
     const char *code = strchr(http.status_line, ' ');
     sub->http_code = code != NULL ? strtol(code + 1, NULL, 10) : 0;
     snprintf(sub->server, sizeof(sub->server), "%s", http.server);
-    snprintf(sub->location, sizeof(sub->location), "%s", http.location);
+    snprintf(sub->location, sizeof(sub->location), "%.*s", (int)sizeof(sub->location) - 1, http.location);
 
     const char *body = strstr(response, "\r\n\r\n");
     extract_title(body != NULL ? body + 4 : "", sub->title, sizeof(sub->title));
@@ -979,7 +979,7 @@ static void apply_probes(const observation_list *observations, subdomain_list *s
         }
         else
         {
-            snprintf(sub->error, sizeof(sub->error), "%s", obs->detail);
+            snprintf(sub->error, sizeof(sub->error), "%.*s", (int)sizeof(sub->error) - 1, obs->detail);
         }
     }
 }

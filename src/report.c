@@ -231,13 +231,13 @@ static void print_header(FILE *out, size_t count, const report_options *options)
     print_field(out, "Generated", generated);
     print_field(out, "Domains", domains);
 
-    unsigned modules = options->modules != 0 ? options->modules : MODULE_ALL;
+    unsigned modules = options->modules != 0 ? options->modules : MODULE_DEFAULT;
     int contacts = !options->passive && (modules & (MODULE_HTTP | MODULE_TLS | MODULE_SUBDOMAINS)) != 0;
 
     print_field(out, "Mode", contacts ? "active (the targets were contacted from your IP)"
                                       : "passive (the targets were not contacted)");
 
-    if (modules != MODULE_ALL)
+    if (modules != MODULE_DEFAULT)
     {
         static const struct
         {
@@ -245,7 +245,7 @@ static void print_header(FILE *out, size_t count, const report_options *options)
             const char *name;
         } names[] = {{MODULE_ADDRESSES, "addresses"}, {MODULE_DNS, "dns"},   {MODULE_WHOIS, "whois"},
                      {MODULE_TLS, "tls"},             {MODULE_HTTP, "http"}, {MODULE_SUBDOMAINS, "subdomains"},
-                     {MODULE_REPUTATION, "reputation"}};
+                     {MODULE_REPUTATION, "reputation"}, {MODULE_LOOKALIKES, "lookalikes"}};
         char list[128] = "";
 
         for (size_t i = 0; i < COUNT(names); i++)
@@ -441,7 +441,7 @@ static void describe_reputation(const reputation_info *rep, char *out, size_t si
 
     if (listed[0] != '\0')
     {
-        snprintf(out, size, "listed: %s", listed);
+        snprintf(out, size, "listed: %.*s", (int)(size > 9 ? size - 9 : 0), listed);
     }
     else if (asked[0] != '\0')
     {
@@ -521,6 +521,78 @@ static void print_reputation(FILE *out, const domain_report *report)
     snprintf(text, sizeof(text), "%ld pulse%s%s%s%s", rep->otx_pulses, rep->otx_pulses == 1 ? "" : "s",
              names[0] != '\0' ? ": " : "", names, rep->otx_allowlisted ? " (marked known-good)" : "");
     print_reputation_source(out, "OTX", rep->otx_status, 0, text);
+}
+
+static void describe_lookalikes(const lookalike_list *list, char *out, size_t size)
+{
+    size_t mail = 0;
+    size_t parked = 0;
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        const lookalike_info *item = &list->items[i];
+
+        mail += item->has_mail && !item->likely_defensive && !item->parked;
+        parked += (size_t)(item->parked && !item->likely_defensive);
+    }
+
+    if (list->status == LOOKUP_FAILED)
+    {
+        snprintf(out, size, "unknown (the resolver did not answer)");
+    }
+    else if (list->count == 0)
+    {
+        snprintf(out, size, "none registered (%zu variants checked)", list->checked);
+    }
+    else
+    {
+        snprintf(out, size, "%zu registered of %zu variants (%zu can receive mail, %zu parked or for sale)",
+                 list->count, list->checked, mail, parked);
+    }
+}
+
+/* One line per registered variant: name, how it was made, whether it takes
+ * mail, where it points and who serves its DNS. */
+static void print_lookalikes(FILE *out, const domain_report *report)
+{
+    const lookalike_list *list = &report->lookalikes;
+    int name_width = 0;
+
+    print_section(out, "LOOKALIKES");
+
+    if (list->status == LOOKUP_FAILED)
+    {
+        fprintf(out, "  Not checked: the resolver did not answer.\n");
+        return;
+    }
+
+    fprintf(out, "  %zu variants checked; %zu registered%s\n", list->checked, list->count, list->count > 0 ? ":\n" : ".");
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        int length = (int)strlen(list->items[i].name);
+        name_width = length > name_width ? length : name_width;
+    }
+
+    name_width = name_width > MAX_NAME_WIDTH + 8 ? MAX_NAME_WIDTH + 8 : name_width;
+
+    for (size_t i = 0; i < list->count; i++)
+    {
+        const lookalike_info *item = &list->items[i];
+        const char *nameserver = item->dns_fails             ? "(its DNS does not answer)"
+                                 : item->nameservers.count > 0 ? item->nameservers.items[0]
+                                                               : "-";
+        char line[DOMAIN_SIZE * 3];
+        size_t length = (size_t)snprintf(line, sizeof(line), "    %-*s  %-13s  %-4s  %-15s  %s%s", name_width,
+                                         item->name, item->technique, item->has_mail ? "mail" : "-",
+                                         item->addresses.count > 0 ? item->addresses.items[0] : "-", nameserver,
+                                         item->likely_defensive ? "  (likely the owner's)"
+                                         : item->parked         ? "  (parked/for sale)"
+                                                                : "");
+
+        length = length < sizeof(line) ? length : sizeof(line) - 1;
+        fprintf(out, "%.*s\n", (int)length, line);
+    }
 }
 
 static void print_registered(FILE *out, const domain_report *report)
@@ -659,6 +731,12 @@ static void print_summary(FILE *out, const domain_report *report)
     if (report_has(report, MODULE_SUBDOMAINS))
     {
         print_subdomain_summary(out, report);
+    }
+
+    if (report_has(report, MODULE_LOOKALIKES))
+    {
+        describe_lookalikes(&report->lookalikes, text, sizeof(text));
+        print_field(out, "Lookalikes", text);
     }
 
     print_gaps(out, report);
@@ -1572,6 +1650,11 @@ static void print_domain(FILE *out, const domain_report *report, const report_op
     if (details && report_has(report, MODULE_REPUTATION))
     {
         print_reputation(out, report);
+    }
+
+    if (details && report_has(report, MODULE_LOOKALIKES))
+    {
+        print_lookalikes(out, report);
     }
 
     if (options->raw)
