@@ -7,11 +7,23 @@
 
 #define RDAP_COLLECTOR "rdap"
 
+/* IANA's RDAP bootstrap file, fetched on first use and reused for every
+ * domain of a run. Zero-initialize it; release it with rdap_bootstrap_free(). */
+typedef struct
+{
+    int state; /* 0: not fetched yet, 1: loaded, -1: the fetch failed */
+    char *text;
+    size_t length;
+    char error[FIELD_SIZE];
+} rdap_bootstrap;
+
+void rdap_bootstrap_free(rdap_bootstrap *bootstrap);
+
 /* Looks up `domain` (a registrable domain) over RDAP, directly at the
  * registry that IANA's bootstrap file lists for its TLD. Returns 1 when the
  * registry gave a usable answer (a record, or "no such domain"), 0 when the
  * caller should fall back to WHOIS. */
-int rdap_collect(const char *domain, observation_list *observations);
+int rdap_collect(const char *domain, rdap_bootstrap *bootstrap, observation_list *observations);
 
 /* Fills `info` from the recorded RDAP answer. Returns 0, or -1 when there
  * is no usable RDAP observation for `domain`. */

@@ -31,8 +31,18 @@ size_t collect_steps(const domain_report *report)
            (report_has(report, MODULE_SUBDOMAINS) ? 6 : 0);
 }
 
+void collect_cache_free(collect_cache *cache)
+{
+    rdap_bootstrap_free(&cache->rdap);
+    whois_cache_free(&cache->whois);
+}
+
 void collect_domain(domain_report *report, const collect_options *options)
 {
+    /* Without a shared cache, one that lives for this domain only. */
+    collect_cache local = {0};
+    collect_cache *cache = options->cache != NULL ? options->cache : &local;
+
     int passive = !options->contact_target;
     observation_list *observations = &report->observations;
     int tls = report_has(report, MODULE_TLS);
@@ -101,9 +111,9 @@ void collect_domain(domain_report *report, const collect_options *options)
     {
         status_step("registration (RDAP/WHOIS)");
 
-        if (!rdap_collect(report->org_domain, observations))
+        if (!rdap_collect(report->org_domain, &cache->rdap, observations))
         {
-            whois_collect(report->org_domain, observations);
+            whois_collect(report->org_domain, &cache->whois, observations);
         }
     }
 
@@ -133,6 +143,11 @@ void collect_domain(domain_report *report, const collect_options *options)
         status_step("subdomain networks (ASN)");
         asn_collect_subdomains(&found, observations);
         subdomain_list_free(&found);
+    }
+
+    if (cache == &local)
+    {
+        collect_cache_free(&local);
     }
 }
 

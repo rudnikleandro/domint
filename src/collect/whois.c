@@ -14,7 +14,6 @@
 
 #define WHOIS_PORT "43"
 #define IANA_WHOIS_SERVER "whois.iana.org"
-#define TLD_CACHE_SIZE 64
 
 /* Real WHOIS answers are a few kilobytes. */
 #define WHOIS_MAX_RESPONSE (256 * 1024)
@@ -24,15 +23,6 @@
 #define WHOIS_IANA_COLLECTOR "whois-iana"
 #define WHOIS_CACHED_DETAIL "answer reused from an earlier query in this run"
 
-typedef struct
-{
-    char tld[64];
-    observation original;
-} tld_entry;
-
-/* IANA's answer for a TLD does not change during a run, so ask once per TLD. */
-static tld_entry tld_cache[TLD_CACHE_SIZE];
-static size_t tld_cache_count;
 
 /* Registries format their records differently; these are the field names
  * seen across the common gTLD and ccTLD servers, in order of preference. */
@@ -305,13 +295,24 @@ static const char *tld_of(const char *domain)
  * this run when there is one. Either way the answer is recorded for this
  * domain, so its evidence is complete on its own. Returns 1 when a server
  * is listed, 0 when none is and -1 when IANA could not be asked. */
-static int find_whois_server(const char *tld, char *server, size_t size, observation_list *observations)
+void whois_cache_free(whois_cache *cache)
 {
-    for (size_t i = 0; i < tld_cache_count; i++)
+    for (size_t i = 0; i < cache->count; i++)
     {
-        if (strcmp(tld_cache[i].tld, tld) == 0)
+        free(cache->entries[i].original.content);
+    }
+
+    memset(cache, 0, sizeof(*cache));
+}
+
+static int find_whois_server(const char *tld, char *server, size_t size, whois_cache *cache,
+                             observation_list *observations)
+{
+    for (size_t i = 0; i < cache->count; i++)
+    {
+        if (strcmp(cache->entries[i].tld, tld) == 0)
         {
-            const observation *original = &tld_cache[i].original;
+            const observation *original = &cache->entries[i].original;
             observation *cached = record_observation(observations, WHOIS_IANA_COLLECTOR, original->source, tld, OBS_OK,
                                                      WHOIS_CACHED_DETAIL, original->content, original->content_length);
             char *answer = observation_text(cached);
@@ -335,13 +336,13 @@ static int find_whois_server(const char *tld, char *server, size_t size, observa
     iana_server(answer, server, size);
     free(answer);
 
-    if (tld_cache_count < TLD_CACHE_SIZE)
+    if (cache->count < WHOIS_CACHE_SIZE)
     {
         /* Keep the raw bytes, not the sanitized text, so the reused
          * observation shows exactly what IANA sent. */
         const observation *recorded = &observations->items[observations->count - 1];
-        tld_entry *entry = &tld_cache[tld_cache_count];
-        tld_cache_count++;
+        whois_cache_entry *entry = &cache->entries[cache->count];
+        cache->count++;
 
         snprintf(entry->tld, sizeof(entry->tld), "%s", tld);
         entry->original = *recorded;
@@ -352,11 +353,11 @@ static int find_whois_server(const char *tld, char *server, size_t size, observa
     return server[0] != '\0';
 }
 
-void whois_collect(const char *domain, observation_list *observations)
+void whois_collect(const char *domain, whois_cache *cache, observation_list *observations)
 {
     const char *tld = tld_of(domain);
     char server[FIELD_SIZE] = "";
-    int found = find_whois_server(tld, server, sizeof(server), observations);
+    int found = find_whois_server(tld, server, sizeof(server), cache, observations);
 
     if (found < 0)
     {

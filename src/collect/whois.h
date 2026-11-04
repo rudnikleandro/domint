@@ -5,6 +5,25 @@
 
 #include "core/model.h"
 
+#define WHOIS_CACHE_SIZE 64
+
+/* IANA's answer for a TLD does not change during a run, so it is asked once
+ * per TLD and reused. Zero-initialize the cache; release it with
+ * whois_cache_free(). */
+typedef struct
+{
+    char tld[64];
+    observation original;
+} whois_cache_entry;
+
+typedef struct
+{
+    whois_cache_entry entries[WHOIS_CACHE_SIZE];
+    size_t count;
+} whois_cache;
+
+void whois_cache_free(whois_cache *cache);
+
 typedef struct
 {
     observation_status status;
@@ -22,7 +41,7 @@ whois_response whois_query_port(const char *server, const char *port, const char
 
 /* Asks IANA for the TLD's server and that server for the registration of
  * `domain` (a registrable domain such as example.com), recording both. */
-void whois_collect(const char *domain, observation_list *observations);
+void whois_collect(const char *domain, whois_cache *cache, observation_list *observations);
 
 /* Builds `info` from the observations recorded by whois_collect(). */
 void whois_interpret(const char *domain, const observation_list *observations, whois_info *info);

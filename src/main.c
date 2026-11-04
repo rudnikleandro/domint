@@ -373,7 +373,9 @@ int main(int argc, char *argv[])
     }
 
     /* Asking for -t or -H is asking for the request they make. */
+    collect_cache cache = {0};
     collect_options collect = {0};
+    collect.cache = &cache;
     collect.contact_target = !opts.passive && (opts.active || (opts.modules & (MODULE_TLS | MODULE_HTTP)) != 0);
     collect.probe_subdomains = !opts.passive && opts.active && !opts.no_probe;
     collect.no_probe = opts.no_probe;
@@ -438,6 +440,7 @@ int main(int argc, char *argv[])
     }
 
     correlation_free(&links);
+    collect_cache_free(&cache);
 
     for (size_t i = 0; i < domains.count; i++)
     {

@@ -15,11 +15,6 @@
 #define BOOTSTRAP_MAX_SIZE (2 * 1024 * 1024)
 #define RDAP_MAX_SIZE (1024 * 1024)
 
-/* The bootstrap file is fetched once per run. */
-static int bootstrap_state; /* 0 not fetched, 1 loaded, -1 failed */
-static char *bootstrap_text;
-static size_t bootstrap_length;
-static char bootstrap_error[FIELD_SIZE];
 
 int rdap_find_service(const char *bootstrap, size_t length, const char *tld, char *out, size_t size)
 {
@@ -61,9 +56,15 @@ int rdap_find_service(const char *bootstrap, size_t length, const char *tld, cha
     return found;
 }
 
-static void load_bootstrap(void)
+void rdap_bootstrap_free(rdap_bootstrap *bootstrap)
 {
-    if (bootstrap_state != 0)
+    free(bootstrap->text);
+    memset(bootstrap, 0, sizeof(*bootstrap));
+}
+
+static void load_bootstrap(rdap_bootstrap *bootstrap)
+{
+    if (bootstrap->state != 0)
     {
         return;
     }
@@ -72,34 +73,34 @@ static void load_bootstrap(void)
 
     if (response.status == OBS_OK)
     {
-        bootstrap_text = response.data;
-        bootstrap_length = response.length;
-        bootstrap_state = 1;
+        bootstrap->text = response.data;
+        bootstrap->length = response.length;
+        bootstrap->state = 1;
     }
     else
     {
-        snprintf(bootstrap_error, sizeof(bootstrap_error), "%s", response.error);
-        bootstrap_state = -1;
+        snprintf(bootstrap->error, sizeof(bootstrap->error), "%s", response.error);
+        bootstrap->state = -1;
     }
 }
 
-int rdap_collect(const char *domain, observation_list *observations)
+int rdap_collect(const char *domain, rdap_bootstrap *bootstrap, observation_list *observations)
 {
     const char *dot = strrchr(domain, '.');
     const char *tld = dot != NULL ? dot + 1 : domain;
     char service[FIELD_SIZE] = "";
     char detail[FIELD_SIZE * 2];
 
-    load_bootstrap();
+    load_bootstrap(bootstrap);
 
-    if (bootstrap_state < 0)
+    if (bootstrap->state < 0)
     {
-        record_observation(observations, BOOTSTRAP_COLLECTOR, "data.iana.org", tld, OBS_NO_RESPONSE, bootstrap_error,
+        record_observation(observations, BOOTSTRAP_COLLECTOR, "data.iana.org", tld, OBS_NO_RESPONSE, bootstrap->error,
                            NULL, 0);
         return 0;
     }
 
-    int found = rdap_find_service(bootstrap_text, bootstrap_length, tld, service, sizeof(service));
+    int found = rdap_find_service(bootstrap->text, bootstrap->length, tld, service, sizeof(service));
 
     /* The 70 KB file itself is not kept per domain; the entry used is. */
     if (found < 0)

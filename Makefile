@@ -3,8 +3,10 @@
 #
 # -MMD -MP write a .d file per object listing the headers it includes, so
 # editing a header rebuilds every .c that depends on it.
-CPPFLAGS = -Isrc
-CFLAGS = -O2 -Wall -Wextra -Werror -MMD -MP -pthread
+# C11 with POSIX.1-2008; _DEFAULT_SOURCE (glibc) and _DARWIN_C_SOURCE (macOS)
+# add the BSD resolver API (res_ninit, ns_initparse) on each system.
+CPPFLAGS = -Isrc -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE
+CFLAGS = -std=c11 -O2 -Wall -Wextra -Werror -MMD -MP -pthread
 LDLIBS = -lresolv -lcurl -pthread
 
 TARGET = domint
@@ -56,7 +58,7 @@ FUZZ_RUNS ?= 20000
 
 fuzz:
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) -Wall -Wextra -Werror -pthread $(FUZZ_FLAGS) $(filter-out $(SRC_DIR)/main.c,$(SRCS)) \
+	$(CC) $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pthread $(FUZZ_FLAGS) $(filter-out $(SRC_DIR)/main.c,$(SRCS)) \
 		$(TEST_DIR)/fuzz.c -o $(FUZZ_BIN) $(LDLIBS) $(FUZZ_FLAGS)
 	./$(FUZZ_BIN) $(FUZZ_RUNS)
 

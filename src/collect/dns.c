@@ -463,18 +463,19 @@ static void dns_query_label(int type, const char *name, char *out, size_t size)
 static int collect_records(res_state resolver, const char *name, int type, observation_list *observations,
                            string_list *values)
 {
-    static unsigned char response[NS_MAXMSG];
+    unsigned char *response = xcalloc(NS_MAXMSG, 1);
     char label[DOMAIN_SIZE + 16];
     char answered_by[64] = "configured nameservers";
 
     dns_query_label(type, name, label, sizeof(label));
 
-    int len = dns_query(resolver, name, type, response, sizeof(response), answered_by, sizeof(answered_by));
+    int len = dns_query(resolver, name, type, response, NS_MAXMSG, answered_by, sizeof(answered_by));
 
     if (len < 0)
     {
         record_observation(observations, DNS_COLLECTOR, answered_by, label, OBS_NO_RESPONSE,
                            "no nameserver gave a usable answer", NULL, 0);
+        free(response);
         return -1;
     }
 
@@ -503,6 +504,7 @@ static int collect_records(res_state resolver, const char *name, int type, obser
     }
 
     record_observation(observations, DNS_COLLECTOR, answered_by, label, status, detail, response, (size_t)len);
+    free(response);
     return matched;
 }
 
@@ -645,18 +647,19 @@ void dns_collect(const char *domain, const char *org_domain, const struct in_add
  * NXDOMAIN together with the alias that points to it. */
 static void collect_alias(res_state resolver, const char *name, observation_list *observations)
 {
-    static unsigned char response[NS_MAXMSG];
+    unsigned char *response = xcalloc(NS_MAXMSG, 1);
     char label[DOMAIN_SIZE + 16];
     char answered_by[64] = "configured nameservers";
 
     dns_query_label(ns_t_a, name, label, sizeof(label));
 
-    int len = dns_query(resolver, name, ns_t_a, response, sizeof(response), answered_by, sizeof(answered_by));
+    int len = dns_query(resolver, name, ns_t_a, response, NS_MAXMSG, answered_by, sizeof(answered_by));
 
     if (len < 0)
     {
         record_observation(observations, DNS_COLLECTOR, answered_by, label, OBS_NO_RESPONSE,
                            "no nameserver gave a usable answer", NULL, 0);
+        free(response);
         return;
     }
 
@@ -685,6 +688,7 @@ static void collect_alias(res_state resolver, const char *name, observation_list
     }
 
     record_observation(observations, DNS_COLLECTOR, answered_by, label, status, detail, response, (size_t)len);
+    free(response);
 }
 
 void dns_collect_cnames(const subdomain_list *subdomains, const struct in_addr *custom_resolver,
@@ -922,7 +926,7 @@ void dns_query_many(const char *const *names, size_t count, int type, const stru
         items[i].query[1] = (unsigned char)((i + 1) & 0xff);
     }
 
-    static unsigned char response[NS_MAXMSG];
+    unsigned char *response = xcalloc(NS_MAXMSG, 1);
     size_t next = 0;
     size_t finished = 0;
 
@@ -979,7 +983,7 @@ void dns_query_many(const char *const *names, size_t count, int type, const stru
 
         ssize_t length;
 
-        while ((length = recv(sockfd, response, sizeof(response), 0)) >= NS_HFIXEDSZ)
+        while ((length = recv(sockfd, response, NS_MAXMSG, 0)) >= NS_HFIXEDSZ)
         {
             size_t id = ((size_t)response[0] << 8 | response[1]);
 
@@ -1006,6 +1010,7 @@ void dns_query_many(const char *const *names, size_t count, int type, const stru
         }
     }
 
+    free(response);
     free(items);
     close(sockfd);
     close_resolver(&resolver);
