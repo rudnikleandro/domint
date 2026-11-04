@@ -2,86 +2,185 @@
 
 [![CI](https://github.com/rudnikleandro/domint/actions/workflows/ci.yml/badge.svg)](https://github.com/rudnikleandro/domint/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Language: C](https://img.shields.io/badge/language-C-555.svg)
 
-**Domain intelligence for threat-intelligence analysts.** Give domint a domain and it
-answers the first questions of an investigation (who registered it and when, where it
-is hosted, how its mail is protected, which subdomains and lookalikes exist, what threat
-feeds say about it) in one readable report, with every claim traceable to the query that
-produced it.
+domint is a command-line tool for domain intelligence, written for cyber threat
+intelligence (CTI) analysts. For one or more domains it collects registration, hosting,
+DNS, certificate, subdomain, reputation and lookalike data, correlates it, and produces a
+report that ranks findings by severity. Every value in the report can be traced to the
+query that produced it.
 
-It is **passive by default**: only third-party sources are asked (registries, resolvers,
-Certificate Transparency, threat feeds), so the target never sees your IP unless you ask
-for it with `--active`.
+domint is passive by default. It queries third-party sources only (registries, DNS
+resolvers, Certificate Transparency logs and threat-intelligence feeds), so the
+investigated domain does not receive traffic from the analyst's address unless active
+mode is requested explicitly.
 
 ![domint demo](docs/demo.gif)
 
-## What it checks
+## Contents
 
-| Module | Flag | What you learn |
-|---|---|---|
-| Registration | `-w` | Registrar, dates, age, status, privacy service (RDAP, falling back to WHOIS) |
-| Addresses | `-a` | IPs, reverse DNS, network (ASN), hosting and CDN in front of it |
-| DNS | `-d` | NS, MX, SPF, DMARC, CAA, DNSSEC, SOA, TXT, mail and DNS providers, SaaS verification tokens |
-| TLS | `-t` | Certificate issuer, validity, trust, and the other names it covers |
-| HTTP | `-H` | Status, redirects, server banner |
-| Subdomains | `-s` | Names from Certificate Transparency and passive DNS, their CNAMEs, and with `--active`, which ones answer |
-| Reputation | `-r` | AlienVault OTX pulses; abuse.ch URLhaus, ThreatFox, Spamhaus DBL and SURBL with a free key |
-| Lookalikes | `-l` | Typosquatting: which of ~1000 variants (homoglyphs, typos, other TLDs, phishing words) are registered and can receive mail |
+- [Features](#features)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Command reference](#command-reference)
+- [Output formats](#output-formats)
+- [Signals](#signals)
+- [Operational security](#operational-security)
+- [Environment variables](#environment-variables)
+- [Exit status](#exit-status)
+- [Testing](#testing)
+- [Limitations](#limitations)
+- [License](#license)
 
-Every module runs by default except `-l`, which costs about a thousand DNS queries.
-Pick modules to run only those, and combine them: `-wd`, `-sl`.
+## Features
 
-## Signals it raises
-
-The report starts with what matters, ranked by severity:
-
-- **Subdomain takeover risk**: an alias (CNAME) pointing to a deleted Azure, Heroku, GitHub Pages or S3 resource that anyone can claim
-- **Lookalike domains** that can receive mail (the setup used for phishing and invoice fraud), set apart from parked, for-sale and the owner's own defensive registrations
-- **Threat-feed listings** on ThreatFox, URLhaus, Spamhaus DBL, SURBL and OTX
-- **Young domains** and newly issued first certificates
-- **Mail spoofing exposure**: missing or weak SPF and DMARC
-- **Exposed environments**: dev, staging and admin hosts that answer, open directory listings
-- **Stale DNS**: names a CDN still answers for without serving anything
-- **Infrastructure leads**: shared addresses, other domains on the same certificate, domains that share indicators when you investigate several
-
-When a source fails, the report says so in a **Gaps** line, so a missing value reads as
-"unknown", not as "none".
-
-## Install
-
-Needs a C compiler and the libcurl headers.
-
-```sh
-# Debian / Ubuntu
-sudo apt-get install build-essential libcurl4-openssl-dev
-# macOS: the Xcode command line tools already include libcurl
-xcode-select --install
-
-make
-sudo make install        # installs to /usr/local/bin
-```
-
-## Usage
-
-```sh
-domint example.com                  # everything but lookalikes, passive
-domint -l example.com               # lookalike domains only
-domint -wd example.com example.org  # registration and DNS of two domains, then what they share
-domint --active --full example.com  # also contact the target; show every collected value
-domint -f domains.txt -o report.txt # domains from a file (one per line, # for comments)
-domint hxxps://example[.]com/login  # URLs and defanged indicators are accepted
-```
-
-| Output | Flag |
+| Module | Data collected |
 |---|---|
-| Summary, signals and gaps | *(default)* |
-| Every collected value | `--full` |
-| Every query made, with the raw answers (audit trail) | `--raw` |
-| JSON for scripts and SIEMs, with an indicators block (domains, IPs, lookalikes) | `-j` |
-| STIX 2.1 bundle for OpenCTI, MISP and other platforms | `--stix` |
+| Registration | Registrar, creation, update and expiry dates, domain age, EPP status codes, registrant and privacy service. RDAP first, WHOIS as fallback. |
+| Addresses | IPv4 and IPv6 addresses, reverse DNS, announcing network (ASN), BGP prefix, CDN or reverse proxy in front of the origin. |
+| DNS | NS, MX, TXT, SPF, DMARC, CAA, DNSSEC (DS and DNSKEY) and SOA records; DNS and mail providers; SaaS verification tokens. |
+| TLS | Certificate subject, issuer, validity period, trust status and subject alternative names. |
+| HTTP | Status line, redirect target and server banner. |
+| Subdomains | Names from Certificate Transparency (crt.sh) and passive DNS (AlienVault OTX, HackerTarget), their CNAME targets and, in active mode, which ones serve content over HTTP or HTTPS. |
+| Reputation | AlienVault OTX pulses; abuse.ch URLhaus, ThreatFox, Spamhaus DBL and SURBL listings. |
+| Lookalikes | Typosquatting variants of the domain (omission, transposition, keyboard neighbours, homoglyphs, bit flips, phishing keywords, alternative TLDs), checked for registration, addresses and mail servers. |
 
-A default run:
+Results from several domains are correlated: shared addresses, BGP prefixes, networks,
+nameservers, mail servers, SOA contacts, verification tokens, registrars and creation
+dates are reported as indicators linking them, ranked by how specific they are.
+
+Reports are available as plain text, JSON and STIX 2.1.
+
+## Installation
+
+domint requires a C99 compiler, make and the libcurl development headers. It builds on
+Linux and macOS.
+
+Debian and Ubuntu:
+
+```sh
+sudo apt-get install build-essential libcurl4-openssl-dev
+```
+
+macOS (libcurl is included with the Xcode command line tools):
+
+```sh
+xcode-select --install
+```
+
+Build and install:
+
+```sh
+git clone https://github.com/rudnikleandro/domint.git
+cd domint
+make
+sudo make install    # installs /usr/local/bin/domint
+```
+
+`make uninstall` removes the installed binary. Set `PREFIX` to install elsewhere, for
+example `make install PREFIX=$HOME/.local`.
+
+## Quick start
+
+```sh
+# All modules except lookalikes, without contacting the target
+domint example.com
+
+# Registration and DNS only
+domint -w -d example.com
+domint -wd example.com           # the same, with combined flags
+
+# Lookalike domains
+domint -l example.com
+
+# Every collected value, contacting the target (HTTP, TLS, subdomain probes)
+domint --active --full example.com
+
+# Several domains from a file, with correlation, written to a file
+domint -f domains.txt -o report.txt
+
+# STIX 2.1 bundle for a threat-intelligence platform
+domint --stix -o example.stix.json example.com
+```
+
+Domains can be given as host names, URLs or defanged indicators; all of the following
+investigate `example.com`:
+
+```sh
+domint example.com
+domint https://www.example.com/login
+domint hxxps://example[.]com
+```
+
+## Command reference
+
+```text
+domint [options] <domain> [domain ...]
+domint [options] -f <file>
+```
+
+### Modules
+
+Without module flags, every module runs except `-l`. With one or more module flags, only
+those modules run, and their detailed sections are shown without `--full`. Short module
+flags can be combined: `-wds` is the same as `-w -d -s`.
+
+| Option | Description |
+|---|---|
+| `-a`, `--addresses` | Addresses, reverse DNS and announcing network (ASN). |
+| `-d`, `--dns` | DNS records: NS, MX, SPF, DMARC, CAA, DNSSEC, SOA and TXT. |
+| `-w`, `--whois` | Registration data (RDAP, falling back to WHOIS). |
+| `-t`, `--tls` | TLS certificate on port 443. Contacts the target. |
+| `-H`, `--http` | HTTP response on port 80. Contacts the target. |
+| `-s`, `--subdomains` | Subdomains from passive sources and their CNAME targets; with `--active`, which of them answer over HTTP or HTTPS. |
+| `-r`, `--reputation` | Threat-intelligence lookups: AlienVault OTX, and abuse.ch URLhaus and ThreatFox when `ABUSECH_AUTH_KEY` is set. |
+| `-l`, `--lookalikes` | Typosquatting: which variants of the name are registered and which can receive mail. Sends about a thousand DNS queries per domain. |
+
+### Input and output
+
+| Option | Description |
+|---|---|
+| `-f`, `--file <path>` | Read domains from a file, one per line. Lines starting with `#` and blank lines are ignored. Can be combined with domains on the command line; duplicates are removed. |
+| `-o`, `--output <path>` | Write the report to a file instead of standard output. |
+| `-j`, `--json` | Write the report as JSON. |
+| `--stix` | Write the report as a STIX 2.1 bundle. Cannot be combined with `--json`. |
+| `--full` | Show every section with all collected data, not only the summary and signals. |
+| `--raw` | In addition to `--full`, list every query made (the SOURCES section) and append the raw WHOIS, RDAP and HTTP responses. |
+
+### Network behaviour
+
+| Option | Description |
+|---|---|
+| `--active` | Contact the targets from the local address: HTTP and TLS requests to the domain and HTTP/HTTPS probes to its subdomains. |
+| `--passive` | Never contact the targets, even when `-t` or `-H` is given. Cannot be combined with `--active`. |
+| `--no-subdomains` | Skip subdomain enumeration. |
+| `--no-probe` | In active mode, skip the HTTP/HTTPS probes of subdomains. |
+| `--resolver <ipv4>` | Send DNS queries to this resolver instead of the system ones. The resolver learns which domains are investigated. |
+
+### General
+
+| Option | Description |
+|---|---|
+| `-V`, `--version` | Print the version and exit. |
+| `-h`, `--help` | Print the usage summary and exit. |
+
+## Output formats
+
+### Text
+
+The default report contains, for each domain:
+
+- **SUMMARY**: registration, hosting, DNS and mail providers, certificate, reputation,
+  subdomain and lookalike counts, and a **Gaps** line listing any source that failed, so
+  that a missing value is read as unknown rather than absent.
+- **SIGNALS**: findings ranked HIGH, MEDIUM, LOW and INFO.
+- **SUBDOMAINS**: online hosts with status, address and network; aliases to other
+  domains; hosts that did not answer, grouped by reason.
+
+`--full` adds the ADDRESSES, HTTP, TLS CERTIFICATE, DNS, REGISTRATION, REPUTATION and
+LOOKALIKES sections. `--raw` adds SOURCES and the raw responses. With more than one
+domain, the report opens with an OVERVIEW table and closes with a CORRELATION section.
+
+Example (`domint example.com`, abridged):
 
 ```text
 SUMMARY
@@ -101,48 +200,89 @@ SIGNALS
            this domain.
 ```
 
+### JSON
+
+`-j` writes one document with the tool metadata, the mode, the modules that ran and, for
+each domain, the collected data, the signals, the gaps and an `indicators` object with the
+domain, its online subdomains, their addresses and the registered lookalikes. Values that
+could not be determined are `null`.
+
 ### STIX 2.1
 
-`--stix` writes a bundle with `domain-name`, `ipv4-addr`, `ipv6-addr` and
-`autonomous-system` observables linked by `resolves-to` and `belongs-to` relationships,
-an `indicator` for each registered lookalike and each threat-feed listing, a `note` with
-the signals and a `report` that groups them. Observable ids are derived from their values
-as the specification requires, so importing the same domain twice merges instead of
-duplicating. The bundles pass the OASIS
+`--stix` writes a bundle containing:
+
+- `domain-name`, `ipv4-addr`, `ipv6-addr` and `autonomous-system` observables, linked by
+  `resolves-to` and `belongs-to` relationships;
+- an `indicator` for each registered lookalike (`anomalous-activity`) and for each
+  threat-feed listing of the domain (`malicious-activity`);
+- a `note` with the signals and a `report` that references every object of the domain.
+
+Observable identifiers are derived from their values as the specification requires, so
+importing the same domain more than once updates the existing objects instead of
+duplicating them. Bundles are validated with the OASIS
 [stix2-validator](https://github.com/oasis-open/cti-stix-validator).
 
-### API keys
+## Signals
 
-All optional, read from the environment:
-
-| Variable | Effect |
+| Severity | Examples |
 |---|---|
-| `ABUSECH_AUTH_KEY` | Enables URLhaus and ThreatFox ([free key](https://auth.abuse.ch)) |
-| `OTX_API_KEY` | Raises the AlienVault OTX rate limit |
+| HIGH | Subdomain takeover risk (CNAME to a deleted resource on a claimable service such as Azure App Service, GitHub Pages, Heroku or S3); domain listed on ThreatFox, URLhaus or the Spamhaus DBL; domain registered in the last 30 days; open directory listing; SPF `+all`. |
+| MEDIUM | Lookalike domains that can receive mail; dangling CNAME; first certificate issued in the last 30 days; missing SPF or DMARC on a mail domain; expired or untrusted certificate; private or unannounced address; broken DNSSEC; exposed non-production environments. |
+| LOW | Lookalike domains pointing to a server; DMARC in monitoring mode; SPF softfail; server version disclosure; stale DNS records served by a CDN; OTX pulses. |
+| INFO | Parked or for-sale lookalikes; lookalikes registered by the domain owner; CDN in front of the origin; missing CAA; unsigned zone; other domains on the same certificate. |
 
 ## Operational security
 
-- Passive mode asks registries, resolvers, crt.sh, OTX, HackerTarget, Team Cymru and abuse.ch. None of them is the target.
-- DNS lookups go through your resolver (or `--resolver`), which sees the names you investigate; the target's own nameservers see the resolver, not you.
-- `--active`, `-t` and `-H` connect to the target and its subdomains from your IP. The report header says which mode ran.
-- Text from the network is sanitized before it reaches your terminal: a threat-feed entry or a WHOIS record cannot inject escape sequences.
+- In passive mode, the sources contacted are RDAP and WHOIS registries, the configured DNS
+  resolver, crt.sh, AlienVault OTX, HackerTarget, Team Cymru and, with a key, abuse.ch.
+  None of them is the investigated domain.
+- DNS queries go through the configured resolver, which learns the names investigated.
+  The domain's authoritative nameservers receive queries from the resolver, not from the
+  analyst. Use `--resolver` to choose the resolver.
+- `--active`, `-t` and `-H` connect to the domain, and `--active` also to its subdomains,
+  from the local address. The report header states which mode was used.
+- All text received from the network is sanitized before it is printed, so a crafted
+  WHOIS record, HTTP header or threat-feed entry cannot inject terminal escape sequences.
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `ABUSECH_AUTH_KEY` | Key for the abuse.ch APIs. Enables URLhaus and ThreatFox lookups. A free key is available at <https://auth.abuse.ch>. |
+| `OTX_API_KEY` | Key for AlienVault OTX. Optional; raises the rate limit of anonymous requests. |
+
+Keys are sent only to their own service and are never written to reports.
+
+## Exit status
+
+| Status | Meaning |
+|---|---|
+| 0 | The report was written. Individual source failures are reported in the Gaps line and do not change the status. |
+| 1 | Invalid arguments, no valid domain, an unreadable input file or an unwritable output file. |
 
 ## Testing
 
 ```sh
-make test                   # unit tests, no network needed
-make fuzz                   # mutation fuzzing of every parser and report writer, with ASan and UBSan
-make fuzz FUZZ_RUNS=300000  # a longer run
+make test                    # unit tests; no network access required
+make fuzz                    # mutation fuzzing with AddressSanitizer and UndefinedBehaviorSanitizer
+make fuzz FUZZ_RUNS=300000   # a longer fuzzing run
 ```
 
-CI builds and runs both on Linux (gcc) and macOS (clang) for every push.
+The fuzzer covers every parser of network data (JSON, WHOIS, RDAP, DNS, HTTP, TLS,
+Certificate Transparency, reputation feeds), the interpretation pipeline and the text,
+JSON and STIX writers. Continuous integration builds the project and runs both suites on
+Linux (gcc) and macOS (clang) for every push.
 
 ## Limitations
 
-- A domain whose sources fail (crt.sh is often overloaded) gets an incomplete subdomain list; the Gaps line says which.
-- Lookalike checks use DNS alone: "registered" means delegated, not who registered it.
-- Internationalized (IDN) names are not accepted as input.
+- Subdomain discovery depends on public sources that are sometimes unavailable or rate
+  limited; the Gaps line reports when the list may be incomplete.
+- Lookalike checks rely on DNS only: a registered variant is one that is delegated, and
+  its owner is not identified.
+- Internationalized domain names (IDN) are not accepted as input.
+- Active probes use a short timeout and check at most 100 subdomains per domain, chosen
+  by relevance.
 
 ## License
 
-[MIT](LICENSE)
+domint is released under the [MIT License](LICENSE).
