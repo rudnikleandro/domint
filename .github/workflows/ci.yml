@@ -23,6 +23,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
 
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: pipx install clang-format==18.1.8 && make format-check
+
       - name: Build
         run: make
 

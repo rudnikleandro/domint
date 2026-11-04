@@ -1,0 +1,176 @@
+.TH DOMINT 1 2026-11-04 "domint 1.0.1" "User Commands"
+.SH NAME
+domint \- domain intelligence for threat-intelligence analysts
+.SH SYNOPSIS
+.B domint
+.RI [ options ]
+.I domain
+.RI [ domain ...]
+.br
+.B domint
+.RI [ options ]
+.B \-f
+.I file
+.SH DESCRIPTION
+.B domint
+collects registration, hosting, DNS, certificate, subdomain, reputation and
+lookalike data about one or more domains, correlates it, and writes a report
+that ranks findings by severity.
+Every value in the report can be traced to the query that produced it.
+.PP
+.B domint
+is passive by default: it queries third-party sources only (registries, DNS
+resolvers, Certificate Transparency logs and threat-intelligence feeds), so the
+investigated domain does not receive traffic from the local address unless
+.B \-\-active
+is given.
+.PP
+Domains can be given as host names, URLs or defanged indicators such as
+.BR hxxps://example[.]com .
+.SH AUTHORIZED USE
+Use
+.B domint
+only against domains that you own or are authorized to assess.
+Every investigation carried out for a client requires prior authorization,
+formalized in a contract that defines the domains in scope, the techniques
+permitted (passive only, or active as well), the period of the assessment and
+how the collected data is handled.
+This applies to passive mode too; active mode additionally sends requests to
+the client's systems.
+.SH MODULES
+Without module options every module runs except
+.BR \-l .
+With one or more module options only those run, and their detailed sections
+are shown without
+.BR \-\-full .
+Short module options can be combined:
+.B \-wds
+is the same as
+.BR "\-w \-d \-s" .
+.TP
+.BR \-a ", " \-\-addresses
+Addresses, reverse DNS and announcing network (ASN).
+.TP
+.BR \-d ", " \-\-dns
+DNS records: NS, MX, SPF, DMARC, CAA, DNSSEC, SOA and TXT.
+.TP
+.BR \-w ", " \-\-whois
+Registration data (RDAP, falling back to WHOIS).
+.TP
+.BR \-t ", " \-\-tls
+TLS certificate on port 443.
+Contacts the target.
+.TP
+.BR \-H ", " \-\-http
+HTTP response on port 80.
+Contacts the target.
+.TP
+.BR \-s ", " \-\-subdomains
+Subdomains from passive sources and their CNAME targets; with
+.BR \-\-active ,
+which of them answer over HTTP or HTTPS.
+.TP
+.BR \-r ", " \-\-reputation
+AlienVault OTX, and abuse.ch URLhaus and ThreatFox when
+.B ABUSECH_AUTH_KEY
+is set.
+.TP
+.BR \-l ", " \-\-lookalikes
+Typosquatting: which variants of the name are registered and which can receive
+mail.
+Sends about a thousand DNS queries per domain.
+.SH OPTIONS
+.TP
+.BR \-f ", " \-\-file " \fIpath\fR"
+Read domains from a file, one per line.
+Lines starting with
+.B #
+and blank lines are ignored.
+.TP
+.BR \-o ", " \-\-output " \fIpath\fR"
+Write the report to a file instead of standard output.
+.TP
+.BR \-j ", " \-\-json
+Write the report as JSON.
+.TP
+.B \-\-stix
+Write the report as a STIX 2.1 bundle.
+Cannot be combined with
+.BR \-\-json .
+.TP
+.B \-\-full
+Show every section with all collected data.
+.TP
+.B \-\-raw
+In addition to
+.BR \-\-full ,
+list every query made and append the raw WHOIS, RDAP and HTTP responses.
+.TP
+.B \-\-active
+Contact the targets from the local address: HTTP and TLS requests to the domain
+and HTTP/HTTPS probes to its subdomains.
+Requires the client's prior written authorization for active testing.
+.TP
+.B \-\-passive
+Never contact the targets, even when
+.B \-t
+or
+.B \-H
+is given.
+Cannot be combined with
+.BR \-\-active .
+.TP
+.B \-\-no\-subdomains
+Skip subdomain enumeration.
+.TP
+.B \-\-no\-probe
+In active mode, skip the HTTP/HTTPS probes of subdomains.
+.TP
+.BI \-\-resolver " ipv4"
+Send DNS queries to this resolver instead of the system ones.
+The resolver learns which domains are investigated.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print the usage summary and exit.
+.SH ENVIRONMENT
+.TP
+.B ABUSECH_AUTH_KEY
+Key for the abuse.ch APIs; enables URLhaus and ThreatFox lookups.
+.TP
+.B OTX_API_KEY
+Key for AlienVault OTX; raises the rate limit of anonymous requests.
+.SH EXIT STATUS
+.TP
+.B 0
+The report was written.
+Failures of individual sources are reported in the Gaps line of the summary and
+do not change the status.
+.TP
+.B 1
+Invalid arguments, no valid domain, an unreadable input file or an unwritable
+output file.
+.SH EXAMPLES
+All modules except lookalikes, without contacting the target:
+.PP
+.RS
+.B domint example.com
+.RE
+.PP
+Registration and DNS of two domains, then the indicators they share:
+.PP
+.RS
+.B domint \-wd example.com example.org
+.RE
+.PP
+A STIX 2.1 bundle of the lookalike domains, for a threat-intelligence platform:
+.PP
+.RS
+.B domint \-l \-\-stix \-o lookalikes.json example.com
+.RE
+.SH SEE ALSO
+.UR https://github.com/rudnikleandro/domint
+The project page
+.UE

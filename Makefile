@@ -13,9 +13,11 @@ TARGET = domint
 SRC_DIR = src
 BUILD_DIR = build
 
-# make install copies the binary to $(DESTDIR)$(PREFIX)/bin.
+# make install copies the binary to $(DESTDIR)$(PREFIX)/bin and the manual
+# page to $(DESTDIR)$(PREFIX)/share/man/man1.
 PREFIX ?= /usr/local
 BINDIR = $(PREFIX)/bin
+MANDIR = $(PREFIX)/share/man/man1
 
 # Sources live in one folder per layer: collect, core, output and support.
 SRCS = $(wildcard $(SRC_DIR)/*.c $(SRC_DIR)/*/*.c)
@@ -62,16 +64,28 @@ fuzz:
 		$(TEST_DIR)/fuzz.c -o $(FUZZ_BIN) $(LDLIBS) $(FUZZ_FLAGS)
 	./$(FUZZ_BIN) $(FUZZ_RUNS)
 
+# make format rewrites the sources in the style of .clang-format;
+# make format-check fails when one differs, as CI does.
+CLANG_FORMAT ?= clang-format
+FORMAT_FILES = $(SRCS) $(wildcard $(SRC_DIR)/*/*.h $(TEST_DIR)/*.c $(TEST_DIR)/*.h)
+
+format:
+	$(CLANG_FORMAT) -i $(FORMAT_FILES)
+
+format-check:
+	$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_FILES)
+
 install: $(TARGET)
-	install -d $(DESTDIR)$(BINDIR)
+	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)
 	install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
+	install -m 644 docs/$(TARGET).1 $(DESTDIR)$(MANDIR)/$(TARGET).1
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/$(TARGET)
+	rm -f $(DESTDIR)$(BINDIR)/$(TARGET) $(DESTDIR)$(MANDIR)/$(TARGET).1
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
 
-.PHONY: all test fuzz install uninstall clean
+.PHONY: all test fuzz format format-check install uninstall clean
 
 -include $(DEPS)

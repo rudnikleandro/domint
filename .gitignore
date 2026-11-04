@@ -7,3 +7,4 @@ relatorio*.txt
 report*.txt
 report*.json
 reports/
+.vscode/

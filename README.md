@@ -30,8 +30,10 @@ authorization from the domain owner, formalized in a contract; see
 - [Operational security](#operational-security)
 - [Environment variables](#environment-variables)
 - [Exit status](#exit-status)
+- [Architecture](#architecture)
 - [Testing](#testing)
 - [Limitations](#limitations)
+- [Security](#security)
 - [License](#license)
 
 ## Authorized use
@@ -100,11 +102,12 @@ Build and install:
 git clone https://github.com/rudnikleandro/domint.git
 cd domint
 make
-sudo make install    # installs /usr/local/bin/domint
+sudo make install    # installs /usr/local/bin/domint and the manual page
+man domint
 ```
 
-`make uninstall` removes the installed binary. Set `PREFIX` to install elsewhere, for
-example `make install PREFIX=$HOME/.local`.
+`make uninstall` removes both. Set `PREFIX` to install elsewhere, for example
+`make install PREFIX=$HOME/.local`.
 
 ## Quick start
 
@@ -290,18 +293,44 @@ Keys are sent only to their own service and are never written to reports.
 | 0 | The report was written. Individual source failures are reported in the Gaps line and do not change the status. |
 | 1 | Invalid arguments, no valid domain, an unreadable input file or an unwritable output file. |
 
+## Architecture
+
+A run goes through four stages. Each lookup is recorded as an **observation** holding
+the exact answer received; everything after collection is derived from those
+observations alone, so every value in a report can be traced to its source and the
+interpretation and analysis can be tested without network access.
+
+```text
+collect  ->  observations  ->  interpret  ->  analyze  ->  report
+(network)    (raw answers)     (fields)       (signals)    (text, JSON, STIX)
+```
+
+The sources are organized in layers; a layer depends only on the layers below it.
+
+| Directory | Contents |
+|---|---|
+| `src/output` | Text, JSON and STIX writers; the terminal progress line. |
+| `src/core` | Data model, pipeline, risk analysis, correlation, gaps, provider catalog. |
+| `src/collect` | One module per data source: DNS, WHOIS, RDAP, TLS, HTTP, subdomains and probes, reputation, lookalikes. |
+| `src/support` | JSON parser and writer, HTTPS client, sockets, domain names, status hooks, utilities. |
+| `tests` | Unit tests by topic, fixtures recorded from public sources, and the fuzzer. |
+
+The code is C11 with POSIX.1-2008, has no dependency besides libcurl and the system
+resolver, and follows the style in `.clang-format`.
+
 ## Testing
 
 ```sh
 make test                    # unit tests; no network access required
 make fuzz                    # mutation fuzzing with AddressSanitizer and UndefinedBehaviorSanitizer
 make fuzz FUZZ_RUNS=300000   # a longer fuzzing run
+make format-check            # code style, as checked in CI
 ```
 
 The fuzzer covers every parser of network data (JSON, WHOIS, RDAP, DNS, HTTP, TLS,
 Certificate Transparency, reputation feeds), the interpretation pipeline and the text,
-JSON and STIX writers. Continuous integration builds the project and runs both suites on
-Linux (gcc) and macOS (clang) for every push.
+JSON and STIX writers. Continuous integration checks the formatting, builds the project
+and runs both suites on Linux (gcc) and macOS (clang) for every push.
 
 ## Limitations
 
@@ -312,6 +341,11 @@ Linux (gcc) and macOS (clang) for every push.
 - Internationalized domain names (IDN) are not accepted as input.
 - Active probes use a short timeout and check at most 100 subdomains per domain, chosen
   by relevance.
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Changes between versions are
+listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

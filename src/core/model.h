@@ -9,7 +9,7 @@
 #define MAX_ADDRESSES 32
 #define MAX_FINDINGS 32
 
-#define DOMINT_VERSION "1.0.0"
+#define DOMINT_VERSION "1.0.1"
 
 /* Zero is SKIPPED, so a zero-initialized report means "nothing ran yet". */
 typedef enum
