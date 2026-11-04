@@ -65,5 +65,9 @@ void test_json(void);
 void test_sources(void);
 void test_source_signals(void);
 void test_subdomains(void);
+void test_report(void);
+void test_reputation(void);
+void test_lookalikes(void);
+void test_output(void);
 
 #endif

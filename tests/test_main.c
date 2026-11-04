@@ -58,6 +58,10 @@ int main(void)
         {"sources", test_sources},
         {"source_signals", test_source_signals},
         {"subdomains", test_subdomains},
+        {"report", test_report},
+        {"reputation", test_reputation},
+        {"lookalikes", test_lookalikes},
+        {"output", test_output},
     };
 
     for (size_t i = 0; i < sizeof(suites) / sizeof(suites[0]); i++)
