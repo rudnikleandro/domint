@@ -12,12 +12,15 @@ query that produced it.
 domint is passive by default. It queries third-party sources only (registries, DNS
 resolvers, Certificate Transparency logs and threat-intelligence feeds), so the
 investigated domain does not receive traffic from the analyst's address unless active
-mode is requested explicitly.
+mode is requested explicitly. Passive or active, every investigation requires prior
+authorization from the domain owner, formalized in a contract; see
+[Authorized use](#authorized-use).
 
 ![domint demo](docs/demo.gif)
 
 ## Contents
 
+- [Authorized use](#authorized-use)
 - [Features](#features)
 - [Installation](#installation)
 - [Quick start](#quick-start)
@@ -30,6 +33,30 @@ mode is requested explicitly.
 - [Testing](#testing)
 - [Limitations](#limitations)
 - [License](#license)
+
+## Authorized use
+
+domint must only be used against domains that you own or that you are authorized to
+assess. Before any investigation carried out for a client, prior authorization is
+mandatory and must be formalized in a contract with the client (a statement of work or
+rules of engagement) that defines at least:
+
+- the domains and subdomains in scope;
+- the techniques permitted: passive collection only, or active mode as well;
+- the period during which the assessment may take place;
+- how the collected data will be stored, shared and deleted.
+
+This applies to passive mode too. Passive collection sends no traffic to the target, but
+it still gathers and processes information about the client and about third parties,
+such as registrant records, which may be subject to data protection law (for example
+LGPD or GDPR).
+
+Active mode (`--active`, `-t`, `-H`) sends requests to the client's systems and to its
+subdomains. Without written authorization, this may constitute an offence under the
+computer-crime laws of many jurisdictions.
+
+The authors provide domint as is, without warranty, and accept no liability for its use;
+the user is solely responsible for ensuring that each use is authorized and lawful.
 
 ## Features
 
@@ -150,7 +177,7 @@ flags can be combined: `-wds` is the same as `-w -d -s`.
 
 | Option | Description |
 |---|---|
-| `--active` | Contact the targets from the local address: HTTP and TLS requests to the domain and HTTP/HTTPS probes to its subdomains. |
+| `--active` | Contact the targets from the local address: HTTP and TLS requests to the domain and HTTP/HTTPS probes to its subdomains. Requires the client's prior written authorization for active testing (see [Authorized use](#authorized-use)). |
 | `--passive` | Never contact the targets, even when `-t` or `-H` is given. Cannot be combined with `--active`. |
 | `--no-subdomains` | Skip subdomain enumeration. |
 | `--no-probe` | In active mode, skip the HTTP/HTTPS probes of subdomains. |
@@ -232,6 +259,9 @@ duplicating them. Bundles are validated with the OASIS
 | INFO | Parked or for-sale lookalikes; lookalikes registered by the domain owner; CDN in front of the origin; missing CAA; unsigned zone; other domains on the same certificate. |
 
 ## Operational security
+
+Passive mode limits what the target can observe; it does not replace the authorization
+described in [Authorized use](#authorized-use), which is required in both modes.
 
 - In passive mode, the sources contacted are RDAP and WHOIS registries, the configured DNS
   resolver, crt.sh, AlienVault OTX, HackerTarget, Team Cymru and, with a key, abuse.ch.
