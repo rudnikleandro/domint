@@ -23,13 +23,6 @@ void subdomain_interpret(const char *domain, const observation_list *observation
  * `domain`, or "" when crt.sh did not answer. */
 void subdomain_ct_first_seen(const observation_list *observations, const char *domain, char *out, size_t size);
 
-/* Probes up to 100 subdomains, the likeliest to matter first (www, mail,
- * remote access, admin and test names), over HTTPS, then HTTP for those
- * that did not answer, several at a time. Each attempt is recorded as an observation and
- * its result (status code, IP address, Server, Location, title) filled into
- * `subdomains`. Skips probing if passive mode or no_probe is set. */
-void subdomain_probe(subdomain_list *subdomains, int passive, int no_probe,
-                     observation_list *observations, const char *domain);
 
 /* Parsing helpers exposed for testing */
 int subdomain_parse_crtsh(const char *json_text, size_t length, const char *target_domain, subdomain_list *subdomains);

@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/model.h"
 #include "collect/whois.h"
+#include "core/model.h"
 
 #define CYMRU_WHOIS_SERVER "whois.cymru.com"
 #define CYMRU_FIELD_COUNT 7

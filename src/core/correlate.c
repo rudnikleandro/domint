@@ -5,8 +5,10 @@
 #include <string.h>
 #include <strings.h>
 
-#include "core/analysis.h"
 #include "collect/dns.h"
+#include "core/analysis.h"
+#include "core/dates.h"
+#include "core/providers.h"
 #include "support/domain.h"
 #include "support/util.h"
 

@@ -2,11 +2,11 @@
 #include <time.h>
 
 #include "collect/dns.h"
-#include "core/model.h"
 #include "collect/rdap.h"
-#include "test.h"
 #include "collect/tls.h"
 #include "collect/whois.h"
+#include "core/model.h"
+#include "test.h"
 
 /* Answers for "a." with one DS (key tag 12345, algorithm 13, digest type 2)
  * and one DNSKEY (flags 257, protocol 3, algorithm 13). */

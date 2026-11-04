@@ -7,10 +7,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "support/domain.h"
 #include "core/model.h"
-#include "support/util.h"
+#include "support/domain.h"
 #include "support/net.h"
+#include "support/util.h"
 
 #define WHOIS_PORT "43"
 #define IANA_WHOIS_SERVER "whois.iana.org"

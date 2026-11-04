@@ -6,9 +6,9 @@
 #include "collect/asn.h"
 #include "collect/dns.h"
 #include "collect/lookalike.h"
-#include "core/model.h"
 #include "collect/reputation.h"
 #include "collect/subdomain.h"
+#include "core/model.h"
 
 static const char *const labels[GAP_COUNT] = {"addresses",  "network (ASN)", "DNS",            "registration",
                                               "reputation", "subdomains",    "aliases (CNAME)", "lookalikes"};

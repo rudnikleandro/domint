@@ -2,9 +2,9 @@
 
 #include "collect/asn.h"
 #include "collect/dns.h"
+#include "collect/whois.h"
 #include "core/model.h"
 #include "test.h"
-#include "collect/whois.h"
 
 /* A DNS response for "example.com TXT" holding "v=spf1 -all". */
 static const unsigned char txt_packet[] = {

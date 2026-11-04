@@ -1,18 +1,18 @@
 #include <stdlib.h>
-#include <time.h>
 #include <string.h>
+#include <time.h>
 
-#include "core/analysis.h"
 #include "collect/dns.h"
-#include "support/json.h"
 #include "collect/lookalike.h"
-#include "core/model.h"
 #include "collect/reputation.h"
-#include "output/report.h"
 #include "collect/subdomain.h"
-#include "test.h"
+#include "core/analysis.h"
+#include "core/model.h"
+#include "output/report.h"
 #include "support/domain.h"
+#include "support/json.h"
 #include "support/util.h"
+#include "test.h"
 
 static void add_live(domain_report *report, const char *name, long code, const char *ip, const char *asn,
                      const char *as_name)

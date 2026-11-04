@@ -6,8 +6,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "test.h"
 #include "collect/whois.h"
+#include "test.h"
 
 /* Starts a one-shot server on 127.0.0.1 that reads the query, answers with
  * `size` bytes and closes. Writes the chosen port and returns the child pid. */

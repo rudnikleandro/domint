@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/model.h"
 #include "support/https.h"
 #include "support/json.h"
-#include "core/model.h"
 #include "support/util.h"
 
 #define OTX_SOURCE "otx.alienvault.com"

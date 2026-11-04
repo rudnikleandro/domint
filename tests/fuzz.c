@@ -16,21 +16,23 @@
 #include <string.h>
 #include <time.h>
 
-#include "core/analysis.h"
 #include "collect/asn.h"
 #include "collect/dns.h"
-#include "support/domain.h"
 #include "collect/http.h"
-#include "support/json.h"
 #include "collect/lookalike.h"
-#include "core/model.h"
 #include "collect/rdap.h"
-#include "output/report.h"
 #include "collect/reputation.h"
 #include "collect/subdomain.h"
 #include "collect/tls.h"
-#include "support/util.h"
 #include "collect/whois.h"
+#include "core/analysis.h"
+#include "core/dates.h"
+#include "core/model.h"
+#include "core/providers.h"
+#include "output/report.h"
+#include "support/domain.h"
+#include "support/json.h"
+#include "support/util.h"
 
 #define MAX_INPUT (64 * 1024)
 #define MAX_SEEDS 64

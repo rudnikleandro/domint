@@ -6,8 +6,8 @@
 #include <string.h>
 
 #include "collect/dns.h"
-#include "support/domain.h"
 #include "core/model.h"
+#include "support/domain.h"
 #include "support/util.h"
 
 #define MAX_LABEL 63

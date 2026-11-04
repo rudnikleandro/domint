@@ -1,6 +1,9 @@
 #ifndef DOMINT_UTIL_H
 #define DOMINT_UTIL_H
 
+/* The number of elements of an array (not of a pointer). */
+#define ARRAY_COUNT(array) (sizeof(array) / sizeof((array)[0]))
+
 #include <stddef.h>
 
 /* Allocation wrappers that exit with a message instead of returning NULL. */

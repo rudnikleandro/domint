@@ -6,8 +6,8 @@
 #include <string.h>
 #include <time.h>
 
-#include "support/json.h"
 #include "core/model.h"
+#include "support/json.h"
 
 /* STIX 2.1 bundle: observables (domain-name, ipv4-addr, ipv6-addr,
  * autonomous-system), the relationships between them, indicators for

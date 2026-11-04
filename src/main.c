@@ -7,13 +7,13 @@
 #include <time.h>
 
 #include "core/correlate.h"
-#include "support/domain.h"
-#include "support/https.h"
 #include "core/model.h"
 #include "core/pipeline.h"
 #include "output/progress.h"
-#include "support/status.h"
 #include "output/report.h"
+#include "support/domain.h"
+#include "support/https.h"
+#include "support/status.h"
 #include "support/util.h"
 
 typedef struct

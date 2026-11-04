@@ -1,19 +1,20 @@
 #include "core/pipeline.h"
 
-#include "core/analysis.h"
 #include "collect/asn.h"
 #include "collect/dns.h"
-#include "support/domain.h"
-#include "core/model.h"
 #include "collect/http.h"
 #include "collect/lookalike.h"
-#include "support/status.h"
+#include "collect/probe.h"
 #include "collect/rdap.h"
 #include "collect/reputation.h"
 #include "collect/resolve.h"
 #include "collect/subdomain.h"
 #include "collect/tls.h"
 #include "collect/whois.h"
+#include "core/analysis.h"
+#include "core/model.h"
+#include "support/domain.h"
+#include "support/status.h"
 
 /* TLS and HTTP connect to the addresses, so they need them resolved too. */
 static int needs_addresses(const domain_report *report)

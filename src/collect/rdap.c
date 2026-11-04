@@ -5,10 +5,10 @@
 #include <string.h>
 #include <strings.h>
 
+#include "collect/whois.h"
 #include "support/https.h"
 #include "support/json.h"
 #include "support/util.h"
-#include "collect/whois.h"
 
 #define BOOTSTRAP_URL "https://data.iana.org/rdap/dns.json"
 #define BOOTSTRAP_COLLECTOR "rdap-bootstrap"

@@ -4,10 +4,10 @@
 #include <string.h>
 #include <time.h>
 
-#include "core/gaps.h"
-#include "support/json.h"
-#include "core/model.h"
 #include "collect/tls.h"
+#include "core/gaps.h"
+#include "core/model.h"
+#include "support/json.h"
 
 #define JSON_MAX_NESTING 16
 

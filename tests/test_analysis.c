@@ -2,7 +2,9 @@
 #include <time.h>
 
 #include "core/analysis.h"
+#include "core/dates.h"
 #include "core/model.h"
+#include "core/providers.h"
 #include "test.h"
 
 static const char *as_date(const char *text)
