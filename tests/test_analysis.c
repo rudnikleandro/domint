@@ -1,8 +1,8 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "analysis.h"
-#include "model.h"
+#include "core/analysis.h"
+#include "core/model.h"
 #include "test.h"
 
 static const char *as_date(const char *text)

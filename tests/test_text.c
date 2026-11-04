@@ -1,5 +1,5 @@
 #include "test.h"
-#include "util.h"
+#include "support/util.h"
 
 void test_text(void)
 {

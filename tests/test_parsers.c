@@ -1,10 +1,10 @@
 #include <stdlib.h>
 
-#include "asn.h"
-#include "dns.h"
-#include "model.h"
+#include "collect/asn.h"
+#include "collect/dns.h"
+#include "core/model.h"
 #include "test.h"
-#include "whois.h"
+#include "collect/whois.h"
 
 /* A DNS response for "example.com TXT" holding "v=spf1 -all". */
 static const unsigned char txt_packet[] = {

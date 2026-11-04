@@ -3,6 +3,7 @@
 #
 # -MMD -MP write a .d file per object listing the headers it includes, so
 # editing a header rebuilds every .c that depends on it.
+CPPFLAGS = -Isrc
 CFLAGS = -O2 -Wall -Wextra -Werror -MMD -MP -pthread
 LDLIBS = -lresolv -lcurl -pthread
 
@@ -14,8 +15,10 @@ BUILD_DIR = build
 PREFIX ?= /usr/local
 BINDIR = $(PREFIX)/bin
 
-SRCS = $(wildcard $(SRC_DIR)/*.c)
+# Sources live in one folder per layer: collect, core, output and support.
+SRCS = $(wildcard $(SRC_DIR)/*.c $(SRC_DIR)/*/*.c)
 OBJS = $(SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
+LIB_OBJS = $(filter-out $(BUILD_DIR)/main.o,$(OBJS))
 
 # make test links every module except main.o with the files in tests/ and
 # runs them from the project root, where tests/fixtures/ is found.
@@ -31,20 +34,19 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDLIBS)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR) $(BUILD_DIR)/tests:
-	mkdir -p $@
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
-$(TEST_BIN): $(filter-out $(BUILD_DIR)/main.o,$(OBJS)) $(TEST_OBJS)
+$(TEST_BIN): $(LIB_OBJS) $(TEST_OBJS)
 	$(CC) $^ -o $@ $(LDLIBS)
 
-$(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) -I$(SRC_DIR) -c $< -o $@
+$(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 # make fuzz builds the parsers and report writers with ASan and UBSan and
 # feeds them corrupted inputs; FUZZ_RUNS sets the inputs per target.
@@ -52,8 +54,9 @@ FUZZ_BIN = $(BUILD_DIR)/fuzz
 FUZZ_FLAGS = -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 FUZZ_RUNS ?= 20000
 
-fuzz: | $(BUILD_DIR)
-	$(CC) -Wall -Wextra -Werror -pthread $(FUZZ_FLAGS) -I$(SRC_DIR) $(filter-out $(SRC_DIR)/main.c,$(SRCS)) \
+fuzz:
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) -Wall -Wextra -Werror -pthread $(FUZZ_FLAGS) $(filter-out $(SRC_DIR)/main.c,$(SRCS)) \
 		$(TEST_DIR)/fuzz.c -o $(FUZZ_BIN) $(LDLIBS) $(FUZZ_FLAGS)
 	./$(FUZZ_BIN) $(FUZZ_RUNS)
 

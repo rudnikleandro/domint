@@ -1,4 +1,4 @@
-#include "domain.h"
+#include "support/domain.h"
 #include "test.h"
 
 static const char *normalized(const char *input)

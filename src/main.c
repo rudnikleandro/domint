@@ -6,14 +6,15 @@
 #include <string.h>
 #include <time.h>
 
-#include "correlate.h"
-#include "domain.h"
-#include "https.h"
-#include "model.h"
-#include "pipeline.h"
-#include "progress.h"
-#include "report.h"
-#include "util.h"
+#include "core/correlate.h"
+#include "support/domain.h"
+#include "support/https.h"
+#include "core/model.h"
+#include "core/pipeline.h"
+#include "output/progress.h"
+#include "support/status.h"
+#include "output/report.h"
+#include "support/util.h"
 
 typedef struct
 {
@@ -391,6 +392,7 @@ int main(int argc, char *argv[])
         snprintf(report->name, sizeof(report->name), "%s", domains.items[i]);
         report->modules = modules;
         progress_begin(i + 1, domains.count, report->name, collect_steps(report));
+        status_set_handlers(progress_step, progress_detail);
 
         clock_gettime(CLOCK_MONOTONIC, &start);
         collect_domain(report, &collect);

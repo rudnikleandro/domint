@@ -1,6 +1,6 @@
 #include <stdlib.h>
 
-#include "json.h"
+#include "support/json.h"
 #include "test.h"
 
 static json_value *parse(const char *text)

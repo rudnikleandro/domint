@@ -1,7 +1,7 @@
 #include <stdlib.h>
 
-#include "correlate.h"
-#include "model.h"
+#include "core/correlate.h"
+#include "core/model.h"
 #include "test.h"
 
 static void make_domain(domain_report *report, const char *name)
